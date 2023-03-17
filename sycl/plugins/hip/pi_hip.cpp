@@ -1864,9 +1864,36 @@ pi_result hip_piDeviceGetInfo(pi_device device, pi_device_info param_name,
                    capabilities);
   }
 
-  case PI_DEVICE_INFO_UUID:
-    // TODO: Implement.
-    // Fall-through for now.
+  case PI_DEVICE_INFO_UUID: {
+    // This API is marked as beta, meaning, while this is feature complete,
+    // it is still open to changes and may have outstanding issues.
+    // TODO: May need to check ROCm version for support of the API.
+    hipError_t hipErrCode = hipDeviceGetUuid(&uuid, device->get());
+    sycl::detail::pi::assertion(hipErrCode == hipSuccess);
+
+    /**
+     * The following seems related to hipDeviceGetUuid query:
+     * https://github.com/RadeonOpenCompute/ROCm/issues/1642
+     * https://github.com/RadeonOpenCompute/ROCR-Runtime/blob/83b46ab91086e10edbc6100d5e55cac11c9b5d7a/src/inc/hsa_ext_amd.h#L291-L300
+     * The ROC Runtime query returns a "header + body = 21 chars", where the
+     * header identifies device type, while the body encodes UUID as a
+     * 16 digit hex string. The HIP docs on hipDeviceGetUuid don't say much.
+     * However, this ROCm discussion suggests the API is part of ROCm 5.2,
+     * and HIP makes use of the ROC Runtime to query the UUID.
+     * Hence, hipDeviceGetUuid should return a 16-byte UUID.
+     */
+
+    constexpr size_t uuid_body_bytes = 16;
+    std::array<unsigned char, uuid_body_bytes> name;
+    std::copy(uuid.bytes, uuid.bytes + uuid_body_bytes, name.begin());
+
+#if 0 // check the result
+    std::cout << "Copied the UUID bytes: " << *name.data() << std::endl;
+#endif
+
+    return getInfoArray(uuid_body_bytes, param_value_size, param_value,
+                        param_value_size_ret, name.data());
+  }
 
   // TODO: Investigate if this information is available on HIP.
   case PI_DEVICE_INFO_IMAGE_SRGB:
