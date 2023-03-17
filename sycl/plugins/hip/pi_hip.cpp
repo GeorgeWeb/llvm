@@ -1863,7 +1863,13 @@ pi_result hip_piDeviceGetInfo(pi_device device, pi_device_info param_name,
     return getInfo(param_value_size, param_value, param_value_size_ret,
                    capabilities);
   }
+
+  case PI_DEVICE_INFO_UUID:
+    // TODO: Implement.
+    // Fall-through for now.
+
   // TODO: Investigate if this information is available on HIP.
+  case PI_DEVICE_INFO_IMAGE_SRGB:
   case PI_DEVICE_INFO_ATOMIC_MEMORY_SCOPE_CAPABILITIES:
   case PI_DEVICE_INFO_DEVICE_ID:
   case PI_DEVICE_INFO_PCI_ADDRESS:
