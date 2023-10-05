@@ -4771,6 +4771,9 @@ class OffloadingActionBuilder final {
     /// Flag to signal if the user requested device code split.
     bool DeviceCodeSplit = false;
 
+    /// Flag for -fgpu-rdc.
+    bool Relocatable = false;
+
     /// List of offload device toolchain, bound arch needed to track for
     /// different binary constructions.
     /// POD to hold information about a SYCL device action.
@@ -4828,9 +4831,18 @@ class OffloadingActionBuilder final {
       if (TT.getOS() != llvm::Triple::NVCL) {
         auto *AA = C.getDriver().ConstructPhaseAction(
             C, Args, phases::Assemble, BA, AssociatedOffloadKind);
-        ActionList DeviceActions = {BA, AA};
-        return C.MakeAction<LinkJobAction>(DeviceActions,
-                                           types::TY_CUDA_FATBIN);
+        ActionList DeviceActions;
+        if (Relocatable) {
+          ActionList AL = {AA};
+          auto *LinkAction = C.MakeAction<LinkJobAction>(AL, types::TY_Object);
+          DeviceActions.push_back(LinkAction);
+        } else {
+          DeviceActions.push_back(BA);
+          DeviceActions.push_back(AA);
+        }
+        JobAction *CudaFatBinary =
+            C.MakeAction<LinkJobAction>(DeviceActions, types::TY_CUDA_FATBIN);
+        return CudaFatBinary;
       }
       return cast<JobAction>(BA);
     }
@@ -4858,7 +4870,11 @@ class OffloadingActionBuilder final {
                       const Driver::InputList &Inputs,
                       OffloadingActionBuilder &OAB)
         : DeviceActionBuilder(C, Args, Inputs, Action::OFK_SYCL, OAB),
-          SYCLInstallation(C.getDriver()) {}
+          SYCLInstallation(C.getDriver()) {
+      // Relocatable device code compilation is the default mode in SYCL.
+      Relocatable = Args.hasFlag(options::OPT_fgpu_rdc,
+                                 options::OPT_fno_gpu_rdc, /*Default=*/true);
+    }
 
     void withBoundArchForToolChain(const ToolChain *TC,
                                    llvm::function_ref<void(const char *)> Op) {
@@ -5708,8 +5724,7 @@ class OffloadingActionBuilder final {
         //         .--------------------------------------.
         //
         ActionList FullLinkObjects;
-        bool IsRDC = !tools::SYCL::shouldDoPerObjectFileLinking(C);
-        if (IsRDC) {
+        if (Relocatable) {
           Action *DeviceLinkAction =
               C.MakeAction<LinkJobAction>(LinkObjects, types::TY_LLVM_BC);
           FullLinkObjects.push_back(DeviceLinkAction);
@@ -5744,7 +5759,7 @@ class OffloadingActionBuilder final {
           ActionList WrapperInputs;
 
           if (SYCLDeviceLibLinked) {
-            if (IsRDC) {
+            if (Relocatable) {
               // First object has to be non-DeviceLib for only-needed to be
               // passed.
               DeviceLibs.insert(DeviceLibs.begin(), FullLinkObject);
@@ -5838,7 +5853,7 @@ class OffloadingActionBuilder final {
             DA.add(*WrapBitcodeAction, *TC, BoundArch, Action::OFK_SYCL);
           }
           bool NoRDCFatStaticArchive =
-              !IsRDC &&
+              !Relocatable &&
               FullDeviceLinkAction->getType() == types::TY_Tempfilelist;
           if (NoRDCFatStaticArchive)
             PostLinkAction = C.MakeAction<ForEachWrappingAction>(
