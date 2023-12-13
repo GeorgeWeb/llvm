@@ -38,11 +38,16 @@ public:
 
     // mPtr was initialized to 1 by the host, now set it to 2.
     atm.fetch_add(1);
+
+    // spin until mPtr is 3, then change it to 4.
     int expected{3};
+    int old = atm.load();
     while (true) {
-      // spin until mPtr is 3, then change it to 4.
-      if (atm.compare_exchange_strong(expected, 4)) {
-        break;
+      old = atm.load();
+      if (old == expected) {
+        if (atm.compare_exchange_strong(old, 4)) {
+          break;
+        }
       }
     }
   }
@@ -82,7 +87,7 @@ int main() {
 
   *ptr = init_val;
   q.parallel_for(sycl::range{1}, kernels::SquareKrnl{ptr});
-  // Synchronise the underlying stream the work is run on before host access.
+  // Synchronise the underlying stream.
   q.wait();
 
   // Check if caches are flushed correctly and same memory is between devices.
@@ -91,6 +96,7 @@ int main() {
   } else {
     std::cerr << "Coherency test failed. Value: " << *ptr
               << " (expected: " << expected << ")\n";
+    coherent = false;
   }
 
   // Coherency test 2
@@ -120,7 +126,7 @@ int main() {
   }
   *ptr += 1;
 
-  // Synchronise the underlying stream the work is run on before host access.
+  // Synchronise the underlying stream.
   q.wait();
 
   // Check if caches are flushed correctly and same memory is between devices.
@@ -129,6 +135,7 @@ int main() {
   } else {
     std::cerr << "Coherency test failed. Value: " << *ptr
               << " (expected: " << expected << ")\n";
+    coherent = false;
   }
 
   // Cleanup
