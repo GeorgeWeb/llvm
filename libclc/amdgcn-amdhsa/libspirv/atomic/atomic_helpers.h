@@ -56,6 +56,7 @@
     }                                                                          \
   }
 
+// This implementation considers Read, Write, and RMW atomic ops as defined by the semantics.
 #define AMDGPU_ATOMIC_IMPL(FUNC_NAME, TYPE, TYPE_MANGLED, AS, AS_MANGLED,                                              \
                            SUB1, BUILTIN)                                                                              \
   _CLC_DEF TYPE                                                                                                        \
@@ -64,7 +65,29 @@
           enum MemorySemanticsMask semantics, TYPE val) {                                                              \
     int atomic_scope = 0, memory_order = 0;                                                                            \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                           \
-    return BUILTIN(p, val, memory_order, atomic_scope);                                                                \
+    switch (memory_order) {                                                                                            \
+      default:                                                                                                         \
+      case __ATOMIC_RELAXED:                                                                                           \
+        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
+      case __ATOMIC_ACQUIRE: {                                                                                         \
+        __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                           \
+        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
+      }                                                                                                                \
+      case __ATOMIC_RELEASE: {                                                                                         \
+        TYPE res = BUILTIN(p, val, memory_order, atomic_scope);                                                        \
+        __spirv_MemoryBarrier((unsigned int)scope, Release);                                                           \
+        return res;                                                                                                    \
+      }                                                                                                                \
+      case __ATOMIC_ACQ_REL:                                                                                           \
+        __spirv_MemoryBarrier((unsigned int)scope, AcquireRelease);                                                    \
+        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
+      case __ATOMIC_SEQ_CST:                                                                                           \
+      /* TODO: Consider investigating the synchronisation difference between                                           \
+         ReleaseFence+AtomicOp+AcquireFence and SequentiallyConsistent fence. */                                       \
+        __spirv_MemoryBarrier((unsigned int)scope, Release);                                                           \
+        TYPE res = BUILTIN(p, val, memory_order, atomic_scope);                                                        \
+        __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                           \
+    }                                                                                                                  \
   }
 
 #define AMDGPU_ATOMIC(FUNC_NAME, TYPE, TYPE_MANGLED, BUILTIN)                  \

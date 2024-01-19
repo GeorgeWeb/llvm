@@ -17,7 +17,18 @@
           enum MemorySemanticsMask semantics) {                                                              \
     int atomic_scope = 0, memory_order = 0;                                                                  \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                 \
-    return __hip_atomic_load(p, memory_order, atomic_scope);                                                 \
+    switch (memory_order) {                                                                                  \
+    case __ATOMIC_ACQUIRE:                                                                                   \
+      T res = __hip_atomic_load(p, memory_order, atomic_scope);                                              \
+      __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                   \
+      return res;                                                                                            \
+    case __ATOMIC_RELAXED:                                                                                   \
+      return __hip_atomic_load(p, memory_order, atomic_scope);                                               \
+    default:                                                                                                 \
+      break;                                                                                                 \
+    }                                                                                                        \
+    __builtin_trap();                                                                                        \
+    __builtin_unreachable();                                                                                 \
   }
 
 #define AMDGPU_ATOMIC_LOAD(TYPE, TYPE_MANGLED)                                 \

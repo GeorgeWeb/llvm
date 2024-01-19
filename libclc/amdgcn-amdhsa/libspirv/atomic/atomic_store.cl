@@ -17,8 +17,17 @@
           enum MemorySemanticsMask semantics, TYPE val) {                                                                            \
     int atomic_scope = 0, memory_order = 0;                                                                                          \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                                         \
-    __hip_atomic_store(p, val, memory_order, atomic_scope);                                                                          \
-    return;                                                                                                                          \
+    switch (memory_order) {                                                                                                          \
+    case __ATOMIC_RELEASE:                                                                                                           \
+      __spirv_MemoryBarrier((unsigned int)scope, Release);                                                                           \
+      __hip_atomic_store(p, val, memory_order, atomic_scope);                                                                        \
+    case __ATOMIC_RELAXED:                                                                                                           \
+      __hip_atomic_store(p, val, memory_order, atomic_scope);                                                                        \
+    default:                                                                                                                         \
+      break;                                                                                                                         \
+    }                                                                                                                                \
+    __builtin_trap();                                                                                                                \
+    __builtin_unreachable();                                                                                                         \
   }
 
 #define AMDGPU_ATOMIC_STORE(TYPE, TYPE_MANGLED)                                \
