@@ -18,12 +18,18 @@
     int atomic_scope = 0, memory_order = 0;                                                                  \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                 \
     switch (memory_order) {                                                                                  \
+    case __ATOMIC_SEQ_CST:                                                                                   \
+      /*                                                                                                     \
+      __spirv_MemoryBarrier((unsigned int)scope, Release);                                                   \
+      return __hip_atomic_load(p, memory_order, __ATOMIC_ACQUIRE);                                           \
+      */                                                                                                     \
+      return __hip_atomic_load(p, __ATOMIC_SEQ_CST, atomic_scope);                                           \
     case __ATOMIC_ACQUIRE:                                                                                   \
-      T res = __hip_atomic_load(p, memory_order, atomic_scope);                                              \
+      T res = __hip_atomic_load(p, __ATOMIC_ACQUIRE, atomic_scope);                                          \
       __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                   \
       return res;                                                                                            \
     case __ATOMIC_RELAXED:                                                                                   \
-      return __hip_atomic_load(p, memory_order, atomic_scope);                                               \
+      return __hip_atomic_load(p, __ATOMIC_RELAXED, atomic_scope);                                           \
     default:                                                                                                 \
       break;                                                                                                 \
     }                                                                                                        \

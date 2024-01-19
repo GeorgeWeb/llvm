@@ -18,11 +18,17 @@
     int atomic_scope = 0, memory_order = 0;                                                                                          \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                                         \
     switch (memory_order) {                                                                                                          \
+    case __ATOMIC_SEQ_CST:                                                                                                           \
+      /*                                                                                                                             \
+      __hip_atomic_store(p, val, memory_order, __ATOMIC_RELEASE);                                                                    \
+      __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                                           \
+      */                                                                                                                             \
+      __hip_atomic_store(p, val, __ATOMIC_SEQ_CST, atomic_scope);                                                                    \
     case __ATOMIC_RELEASE:                                                                                                           \
       __spirv_MemoryBarrier((unsigned int)scope, Release);                                                                           \
-      __hip_atomic_store(p, val, memory_order, atomic_scope);                                                                        \
+      __hip_atomic_store(p, val, __ATOMIC_RELEASE, atomic_scope);                                                                    \
     case __ATOMIC_RELAXED:                                                                                                           \
-      __hip_atomic_store(p, val, memory_order, atomic_scope);                                                                        \
+      __hip_atomic_store(p, val, __ATOMIC_RELAXED, atomic_scope);                                                                    \
     default:                                                                                                                         \
       break;                                                                                                                         \
     }                                                                                                                                \

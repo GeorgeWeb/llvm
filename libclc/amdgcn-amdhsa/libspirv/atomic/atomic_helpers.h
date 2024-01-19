@@ -56,7 +56,8 @@
     }                                                                          \
   }
 
-// This implementation considers Read, Write, and RMW atomic ops as defined by the semantics.
+// This implementation considers Read, Write, and RMW atomic ops as defined by
+// the semantics.
 #define AMDGPU_ATOMIC_IMPL(FUNC_NAME, TYPE, TYPE_MANGLED, AS, AS_MANGLED,                                              \
                            SUB1, BUILTIN)                                                                              \
   _CLC_DEF TYPE                                                                                                        \
@@ -66,27 +67,26 @@
     int atomic_scope = 0, memory_order = 0;                                                                            \
     GET_ATOMIC_SCOPE_AND_ORDER(scope, atomic_scope, semantics, memory_order)                                           \
     switch (memory_order) {                                                                                            \
-      default:                                                                                                         \
-      case __ATOMIC_RELAXED:                                                                                           \
-        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
-      case __ATOMIC_ACQUIRE: {                                                                                         \
-        __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                           \
-        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
-      }                                                                                                                \
-      case __ATOMIC_RELEASE: {                                                                                         \
-        TYPE res = BUILTIN(p, val, memory_order, atomic_scope);                                                        \
-        __spirv_MemoryBarrier((unsigned int)scope, Release);                                                           \
-        return res;                                                                                                    \
-      }                                                                                                                \
-      case __ATOMIC_ACQ_REL:                                                                                           \
-        __spirv_MemoryBarrier((unsigned int)scope, AcquireRelease);                                                    \
-        return BUILTIN(p, val, memory_order, atomic_scope);                                                            \
-      case __ATOMIC_SEQ_CST:                                                                                           \
+    default:                                                                                                           \
+    case __ATOMIC_RELAXED:                                                                                             \
+      return BUILTIN(p, val, __ATOMIC_RELAXED, atomic_scope);                                                          \
+    case __ATOMIC_ACQUIRE: {                                                                                           \
+      return BUILTIN(p, val, __ATOMIC_ACQUIRE, atomic_scope);                                                          \
+    }                                                                                                                  \
+    case __ATOMIC_RELEASE: {                                                                                           \
+      return BUILTIN(p, val, __ATOMIC_RELEASE, atomic_scope);                                                          \
+    }                                                                                                                  \
+    case __ATOMIC_ACQ_REL:                                                                                             \
+      return BUILTIN(p, val, __ATOMIC_ACQ_REL, atomic_scope);                                                          \
+    case __ATOMIC_SEQ_CST:                                                                                             \
       /* TODO: Consider investigating the synchronisation difference between                                           \
-         ReleaseFence+AtomicOp+AcquireFence and SequentiallyConsistent fence. */                                       \
-        __spirv_MemoryBarrier((unsigned int)scope, Release);                                                           \
-        TYPE res = BUILTIN(p, val, memory_order, atomic_scope);                                                        \
-        __spirv_MemoryBarrier((unsigned int)scope, Acquire);                                                           \
+        ReleaseFence+AtomicOp+AcquireFence and SequentiallyConsistent fence.                                           \
+      */                                                                                                               \
+      /*                                                                                                               \
+      __spirv_MemoryBarrier((unsigned int)scope, AcquireRelease);                                                      \
+      return BUILTIN(p, val, __ATOMIC_ACQ_REL, atomic_scope);                                                          \
+      */                                                                                                               \
+      return BUILTIN(p, val, __ATOMIC_SEQ_CST, atomic_scope);                                                          \
     }                                                                                                                  \
   }
 
