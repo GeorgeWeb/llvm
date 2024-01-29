@@ -189,41 +189,41 @@ defvar HipSubgroupSizesGCN5 = [64];     // gfx900-gfx906, gfx90c, GCN 5th gen is
 defvar HipSubgroupSizesRDNA = [32, 64]; // gfxX10-gfx11, natively 32 for compute workloads (64-waves mode for graphics)
 defvar HipSubgroupSizesCDNA = [64];     // gfx908, gfx90a
 
-defm : HipTargetInfo<"amd_gpu_gfx700", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx701", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx702", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx801", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx802", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx803", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx805", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx810", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx900", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx902", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx904", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx906", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx908", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx909", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx90a", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx90c", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx940", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx941", [AspectGpu], [], "", "">; // TBA
-defm : HipTargetInfo<"amd_gpu_gfx942", [AspectGpu], [], "", "">; // TBA
-defm : HipTargetInfo<"amd_gpu_gfx1010", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1011", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1012", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1013", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1030", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1031", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1032", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1033", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1034", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1035", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1036", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1100", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1101", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1102", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1103", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1150", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1151", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
-defm : HipTargetInfo<"amd_gpu_gfx1200", [AspectGpu], [], "", "">; // TBA
-defm : HipTargetInfo<"amd_gpu_gfx1201", [AspectGpu], [], "", "">; // TBA
+def : HipTargetInfo<"amd_gpu_gfx700", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx701", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx702", [AspectGpu], HipSubgroupSizesGCN2, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx801", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx802", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx803", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx805", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx810", [AspectGpu], HipSubgroupSizesGCN3, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx900", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx902", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx904", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx906", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx908", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx909", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx90a", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx90c", [AspectGpu], HipSubgroupSizesGCN5, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx940", [AspectGpu], HipSubgroupSizesCDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx941", [AspectGpu], [], "", "">; // TBA
+def : HipTargetInfo<"amd_gpu_gfx942", [AspectGpu], [], "", "">; // TBA
+def : HipTargetInfo<"amd_gpu_gfx1010", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1011", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1012", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1013", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1030", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1031", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1032", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1033", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1034", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1035", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1036", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1100", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1101", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1102", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1103", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1150", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1151", [AspectGpu], HipSubgroupSizesRDNA, "", "">;
+def : HipTargetInfo<"amd_gpu_gfx1200", [AspectGpu], [], "", "">; // TBA
+def : HipTargetInfo<"amd_gpu_gfx1201", [AspectGpu], [], "", "">; // TBA
