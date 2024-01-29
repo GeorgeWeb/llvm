@@ -1305,6 +1305,9 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       }
     }
   }
+  for (auto TT : UniqueSYCLTriplesVec) {
+    llvm::outs() << "UniqueSYCLTriplesVec TT = " << TT.getTriple() << '\n';
+  }
   // Define macros associated with `any_device_has/all_devices_have` according
   // to the aspects defined in the DeviceConfigFile for the SYCL targets.
   populateSYCLDeviceTraitsMacrosArgs(C.getInputArgs(), UniqueSYCLTriplesVec);
@@ -3494,7 +3497,7 @@ getLinkerArgs(Compilation &C, DerivedArgList &Args, bool IncludeObj = false) {
   // manner than the OpenMP processing.  We should try and refactor this
   // to use the OpenMP flow (adding -l<name> to the llvm-link step)
   auto resolveStaticLib = [&](StringRef LibName, bool IsStatic) -> bool {
-    if (!LibName.startswith("-l"))
+    if (!LibName.starts_with("-l"))
       return false;
     for (auto &LPath : LibPaths) {
       if (!IsStatic) {
@@ -3639,7 +3642,7 @@ static bool IsSYCLDeviceLibObj(std::string ObjFilePath, bool isMSVCEnv) {
   StringRef ObjFileName = llvm::sys::path::filename(ObjFilePath);
   StringRef ObjSuffix = isMSVCEnv ? ".obj" : ".o";
   bool Ret =
-      (ObjFileName.startswith("libsycl-") && ObjFileName.endswith(ObjSuffix))
+      (ObjFileName.starts_with("libsycl-") && ObjFileName.ends_with(ObjSuffix))
           ? true
           : false;
   return Ret;
@@ -10293,13 +10296,23 @@ void Driver::populateSYCLDeviceTraitsMacrosArgs(
   std::map<StringRef, bool> AnyDeviceHas;
   bool AnyDeviceHasAnyAspect = false;
   unsigned int ValidTargets = 0;
+  for (size_t i = 0; i < Args.size(); ++i) {
+    const auto Arg = Args.getArgString(i);
+    llvm::outs() << "populate SYCL Device Traits: Arg = " << Arg << '\n';
+  }
   for (const auto &TargetTriple : UniqueSYCLTriplesVec) {
     // Try and find the whole triple, if there's no match, remove parts of the
     // triple from the end to find partial matches.
     auto TargetTripleStr = TargetTriple.getTriple();
+    llvm::outs() << "TargetTripleStr = " << TargetTripleStr << '\n';
     bool Found = false;
     bool EmptyTriple = false;
     auto TripleIt = TargetTable.end();
+
+    for (auto [key, val] : TargetTable) {
+      //llvm::outs() << "TargetTable key = " << key << '\n';
+    }
+
     while (!Found && !EmptyTriple) {
       TripleIt = TargetTable.find(TargetTripleStr);
       Found = (TripleIt != TargetTable.end());
@@ -10308,12 +10321,15 @@ void Driver::populateSYCLDeviceTraitsMacrosArgs(
         EmptyTriple = (Pos == std::string::npos);
         TargetTripleStr =
             EmptyTriple ? TargetTripleStr : TargetTripleStr.substr(0, Pos);
+        llvm::outs() << "Not found, TargetTripleStr = " << TargetTripleStr << '\n';
       }
     }
+    llvm::outs() << "Final, TargetTripleStr = " << TargetTripleStr << '\n';
     if (Found) {
       assert(TripleIt != TargetTable.end());
       const auto &TargetInfo = (*TripleIt).second;
       ++ValidTargets;
+      llvm::outs() << "Found a valid  target\n";
       const auto &AspectList = TargetInfo.aspects;
       const auto &MaySupportOtherAspects = TargetInfo.maySupportOtherAspects;
       if (!AnyDeviceHasAnyAspect)
