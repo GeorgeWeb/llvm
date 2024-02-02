@@ -133,6 +133,22 @@ def : TargetInfo<"x86_64", [], [], "", "", 1>;
 //defvar AspectList = [AspectCpu] # AllUSMAspects;
 //def : TargetInfo<"Test", AspectList, []>;
 //def : TargetInfo<"Test2", [AspectCpu] # AllUSMAspects, []>;
+def : TargetInfo<"intel_gpu_skl", [AspectCpu, AspectGpu, AspectAccelerator, AspectCustom, AspectFp16, AspectFp64, AspectImage, AspectOnline_compiler, 
+    AspectOnline_linker, AspectQueue_profiling, AspectUsm_device_allocations, AspectUsm_host_allocations,
+    AspectUsm_shared_allocations, AspectUsm_system_allocations, AspectExt_intel_pci_address,
+    AspectExt_intel_gpu_eu_count, AspectExt_intel_gpu_eu_simd_width, AspectExt_intel_gpu_slices,
+    AspectExt_intel_gpu_subslices_per_slice, AspectExt_intel_gpu_eu_count_per_subslice,
+    AspectExt_intel_max_mem_bandwidth, AspectExt_intel_mem_channel, AspectUsm_atomic_host_allocations,
+    AspectUsm_atomic_shared_allocations, AspectAtomic64, AspectExt_intel_device_info_uuid, AspectExt_oneapi_srgb,
+    AspectExt_oneapi_native_assert, AspectHost_debuggable, AspectExt_intel_gpu_hw_threads_per_eu,
+    AspectExt_oneapi_cuda_async_barrier, AspectExt_oneapi_bfloat16_math_functions, AspectExt_intel_free_memory,
+    AspectExt_intel_device_id, AspectExt_intel_memory_clock_rate, AspectExt_intel_memory_bus_width, AspectEmulated,
+    AspectExt_intel_legacy_image, AspectExt_oneapi_bindless_images,
+    AspectExt_oneapi_bindless_images_shared_usm, AspectExt_oneapi_bindless_images_1d_usm, AspectExt_oneapi_bindless_images_2d_usm,
+    AspectExt_oneapi_interop_memory_import, AspectExt_oneapi_interop_memory_export,
+    AspectExt_oneapi_interop_semaphore_import, AspectExt_oneapi_interop_semaphore_export,
+    AspectExt_oneapi_mipmap, AspectExt_oneapi_mipmap_anisotropy, AspectExt_oneapi_mipmap_level_reference, AspectExt_intel_esimd,
+    AspectExt_oneapi_ballot_group, AspectExt_oneapi_fixed_size_group, AspectExt_oneapi_opportunistic_group, AspectExt_oneapi_tangle_group], [1, 2, 4, 8], "ocloc", "-device skl", 0>;
 
 //
 // CUDA / NVPTX device aspects

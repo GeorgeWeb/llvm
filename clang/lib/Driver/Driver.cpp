@@ -96,13 +96,14 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cstdlib> // ::getenv
 #include <map>
 #include <memory>
 #include <optional>
 #include <regex>
-#include <sstream>
 #include <set>
+#include <sstream>
 #include <utility>
 #if LLVM_ON_UNIX
 #include <unistd.h> // getpid
@@ -360,8 +361,7 @@ phases::ID Driver::getFinalPhase(const DerivedArgList &DAL,
   if (CCCIsCPP() || (PhaseArg = DAL.getLastArg(options::OPT_E)) ||
       (PhaseArg = DAL.getLastArg(options::OPT__SLASH_EP)) ||
       (PhaseArg = DAL.getLastArg(options::OPT_M, options::OPT_MM)) ||
-      (PhaseArg = DAL.getLastArg(options::OPT__SLASH_P)) ||
-      CCGenDiagnostics) {
+      (PhaseArg = DAL.getLastArg(options::OPT__SLASH_P)) || CCGenDiagnostics) {
     FinalPhase = phases::Preprocess;
 
     // --precompile only runs up to precompilation.
@@ -384,19 +384,19 @@ phases::ID Driver::getFinalPhase(const DerivedArgList &DAL,
              (PhaseArg = DAL.getLastArg(options::OPT_emit_ast))) {
     FinalPhase = phases::Compile;
 
-  // -S only runs up to the backend.
+    // -S only runs up to the backend.
   } else if ((PhaseArg = DAL.getLastArg(options::OPT_S)) ||
              (PhaseArg = DAL.getLastArg(options::OPT_fsycl_device_only))) {
     FinalPhase = phases::Backend;
 
-  // -c compilation only runs up to the assembler.
+    // -c compilation only runs up to the assembler.
   } else if ((PhaseArg = DAL.getLastArg(options::OPT_c))) {
     FinalPhase = phases::Assemble;
 
   } else if ((PhaseArg = DAL.getLastArg(options::OPT_emit_interface_stubs))) {
     FinalPhase = phases::IfsMerge;
 
-  // Otherwise do everything.
+    // Otherwise do everything.
   } else
     FinalPhase = phases::Link;
 
@@ -546,8 +546,7 @@ DerivedArgList *Driver::TranslateInputArgs(const InputArgList &Args) const {
 ///
 /// This routine provides the logic to compute a target triple from various
 /// args passed to the driver and the default triple string.
-static llvm::Triple computeTargetTriple(const Driver &D,
-                                        StringRef TargetTriple,
+static llvm::Triple computeTargetTriple(const Driver &D, StringRef TargetTriple,
                                         const ArgList &Args,
                                         StringRef DarwinArchName = "") {
   // FIXME: Already done in Compilation *Driver::BuildCompilation
@@ -665,8 +664,8 @@ static llvm::Triple computeTargetTriple(const Driver &D,
   // Handle -miamcu flag.
   if (Args.hasFlag(options::OPT_miamcu, options::OPT_mno_iamcu, false)) {
     if (Target.get32BitArchVariant().getArch() != llvm::Triple::x86)
-      D.Diag(diag::err_drv_unsupported_opt_for_target) << "-miamcu"
-                                                       << Target.str();
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << "-miamcu" << Target.str();
 
     if (A && !A->getOption().matches(options::OPT_m32))
       D.Diag(diag::err_drv_argument_not_allowed_with)
@@ -885,8 +884,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       CudaTC = std::make_unique<toolchains::CudaToolChain>(
           *this, *CudaTriple, *HostTC, C.getInputArgs(), OFK);
 
-    // Emit a warning if the detected CUDA version is too new.
-    CudaInstallationDetector &CudaInstallation =
+      // Emit a warning if the detected CUDA version is too new.
+      CudaInstallationDetector &CudaInstallation =
           static_cast<toolchains::CudaToolChain &>(*CudaTC).CudaInstallation;
       if (CudaInstallation.isValid())
         CudaInstallation.WarnIfUnsupportedVersion();
@@ -1171,6 +1170,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
 
   llvm::StringMap<StringRef> FoundNormalizedTriples;
   llvm::SmallVector<llvm::Triple, 4> UniqueSYCLTriplesVec;
+  llvm::SmallVector<StringRef, 4> UniqueSYCLDevicesVec;
   if (HasSYCLTargetsOption) {
     // At this point, we know we have a valid combination
     // of -fsycl*target options passed
@@ -1187,25 +1187,30 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
               << SYCLForceTarget->getAsString(C.getInputArgs());
 
         for (StringRef Val : SYCLTargetsValues->getValues()) {
+          llvm::outs() << "Processing Val = " << Val << '\n';
           StringRef UserTargetName(Val);
+          std::optional<StringRef> UserTargetDeviceName{};
           if (auto Device = gen::isGPUTarget<gen::IntelGPU>(Val)) {
             if (Device->empty()) {
               Diag(clang::diag::err_drv_invalid_sycl_target) << Val;
               continue;
             }
             UserTargetName = "spir64_gen";
+            UserTargetDeviceName = Device;
           } else if (auto Device = gen::isGPUTarget<gen::NvidiaGPU>(Val)) {
             if (Device->empty()) {
               Diag(clang::diag::err_drv_invalid_sycl_target) << Val;
               continue;
             }
             UserTargetName = "nvptx64-nvidia-cuda";
+            UserTargetDeviceName = Device;
           } else if (auto Device = gen::isGPUTarget<gen::AmdGPU>(Val)) {
             if (Device->empty()) {
               Diag(clang::diag::err_drv_invalid_sycl_target) << Val;
               continue;
             }
             UserTargetName = "amdgcn-amd-amdhsa";
+            UserTargetDeviceName = Device;
           } else if (Val == "native_cpu") {
             const ToolChain *HostTC =
                 C.getSingleOffloadToolChain<Action::OFK_Host>();
@@ -1232,6 +1237,9 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
           // the following iterations.
           FoundNormalizedTriples[NormalizedName] = Val;
           UniqueSYCLTriplesVec.push_back(MakeSYCLDeviceTriple(UserTargetName));
+          if (UserTargetDeviceName.has_value()) {
+            UniqueSYCLDevicesVec.push_back(UserTargetDeviceName.value());
+          }
         }
         addSYCLDefaultTriple(C, UniqueSYCLTriplesVec);
       } else
@@ -1306,20 +1314,29 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
     }
   }
   for (auto TT : UniqueSYCLTriplesVec) {
-    llvm::outs() << "UniqueSYCLTriplesVec TT = " << TT.getTriple() << '\n';
+    llvm::outs() << "UniqueSYCLTriple = " << TT.getTriple() << '\n';
+  }
+  for (auto Device : UniqueSYCLDevicesVec) {
+    llvm::outs() << "UniqueSYCLDevice = " << Device << '\n';
   }
   // Define macros associated with `any_device_has/all_devices_have` according
   // to the aspects defined in the DeviceConfigFile for the SYCL targets.
-  populateSYCLDeviceTraitsMacrosArgs(C.getInputArgs(), UniqueSYCLTriplesVec);
+  // Pass in SYCLTargets and Device
+  // populateSYCLDeviceTraitsMacrosArgs(C.getInputArgs(), UniqueSYCLTriplesVec);
   // We'll need to use the SYCL and host triples as the key into
   // getOffloadingDeviceToolChain, because the device toolchains we're
   // going to create will depend on both.
   const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+  llvm::outs() << "HostTC ArchName: " << HostTC->getArchName() << "\n";
   for (auto &TT : UniqueSYCLTriplesVec) {
     auto SYCLTC = &getOffloadingDeviceToolChain(C.getInputArgs(), TT, *HostTC,
                                                 Action::OFK_SYCL);
+    llvm::outs() << "SYCLTC ArchName: " << SYCLTC->getArchName() << "\n";
+
     C.addOffloadDeviceToolChain(SYCLTC, Action::OFK_SYCL);
   }
+
+  populateSYCLDeviceTraitsMacrosArgs(C.getInputArgs(), UniqueSYCLTriplesVec);
 
   //
   // TODO: Add support for other offloading programming models here.
@@ -1569,8 +1586,8 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   bool HasConfigFile = !ContainsError && (CfgOptions.get() != nullptr);
 
   // All arguments, from both config file and command line.
-  InputArgList Args = std::move(HasConfigFile ? std::move(*CfgOptions)
-                                              : std::move(*CLOptions));
+  InputArgList Args =
+      std::move(HasConfigFile ? std::move(*CfgOptions) : std::move(*CLOptions));
 
   if (HasConfigFile)
     for (auto *Opt : *CLOptions) {
@@ -1734,14 +1751,13 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   if (Arg *A = Args.getLastArg(options::OPT_fembed_bitcode_EQ)) {
     StringRef Name = A->getValue();
     unsigned Model = llvm::StringSwitch<unsigned>(Name)
-        .Case("off", EmbedNone)
-        .Case("all", EmbedBitcode)
-        .Case("bitcode", EmbedBitcode)
-        .Case("marker", EmbedMarker)
-        .Default(~0U);
+                         .Case("off", EmbedNone)
+                         .Case("all", EmbedBitcode)
+                         .Case("bitcode", EmbedBitcode)
+                         .Case("marker", EmbedMarker)
+                         .Default(~0U);
     if (Model == ~0U) {
-      Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args)
-                                                << Name;
+      Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args) << Name;
     } else
       BitcodeEmbed = static_cast<BitcodeEmbedMode>(Model);
   }
@@ -1790,8 +1806,8 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   DerivedArgList *TranslatedArgs = TranslateInputArgs(*UArgs);
 
   // Owned by the host.
-  const ToolChain &TC = getToolChain(
-      *UArgs, computeTargetTriple(*this, TargetTriple, *UArgs));
+  const ToolChain &TC =
+      getToolChain(*UArgs, computeTargetTriple(*this, TargetTriple, *UArgs));
 
   // Report warning when arm64EC option is overridden by specified target
   if ((TC.getTriple().getArch() != llvm::Triple::aarch64 ||
@@ -1973,7 +1989,7 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
     size_t LineEnd = Data.find_first_of("\n", ParentProcPos);
     if (LineEnd == StringRef::npos)
       continue;
-    StringRef ParentProcess = Data.slice(ParentProcPos+15, LineEnd).trim();
+    StringRef ParentProcess = Data.slice(ParentProcPos + 15, LineEnd).trim();
     int OpenBracket = -1, CloseBracket = -1;
     for (size_t i = 0, e = ParentProcess.size(); i < e; ++i) {
       if (ParentProcess[i] == '[')
@@ -1986,7 +2002,8 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
     int CrashPID;
     if (OpenBracket < 0 || CloseBracket < 0 ||
         ParentProcess.slice(OpenBracket + 1, CloseBracket)
-            .getAsInteger(10, CrashPID) || CrashPID != PID) {
+            .getAsInteger(10, CrashPID) ||
+        CrashPID != PID) {
       continue;
     }
 
@@ -2242,8 +2259,7 @@ void Driver::generateCompilationDiagnostics(
       CrashDiagDir += "_<YYYY-MM-DD-HHMMSS>_<hostname>.crash";
       Diag(clang::diag::note_drv_command_failed_diag_msg)
           << "Crash backtrace is located in";
-      Diag(clang::diag::note_drv_command_failed_diag_msg)
-          << CrashDiagDir.str();
+      Diag(clang::diag::note_drv_command_failed_diag_msg) << CrashDiagDir.str();
       Diag(clang::diag::note_drv_command_failed_diag_msg)
           << "(choose the .crash file that corresponds to your crash)";
     }
@@ -2359,8 +2375,7 @@ void Driver::PrintHelp(bool ShowHidden) const {
 
   std::string Usage = llvm::formatv("{0} [options] file...", Name).str();
   getOpts().printHelp(llvm::outs(), Usage.c_str(), DriverTitle.c_str(),
-                      ShowHidden, /*ShowAllAliases=*/false,
-                      VisibilityMask);
+                      ShowHidden, /*ShowAllAliases=*/false, VisibilityMask);
 }
 
 llvm::Triple Driver::MakeSYCLDeviceTriple(StringRef TargetArch) const {
@@ -2397,7 +2412,7 @@ void Driver::PrintSYCLToolHelp(const Compilation &C) const {
                                          "opencl-aot", "--help", ""));
     if (HelpArgs.empty()) {
       C.getDriver().Diag(diag::err_drv_unsupported_option_argument)
-                         << A->getSpelling() << AV;
+          << A->getSpelling() << AV;
       return;
     }
   }
@@ -2405,8 +2420,8 @@ void Driver::PrintSYCLToolHelp(const Compilation &C) const {
   // Go through the args and emit the help information for each.
   for (auto &HA : HelpArgs) {
     llvm::outs() << "Emitting help information for " << std::get<1>(HA) << '\n'
-        << "Use triple of '" << std::get<0>(HA).normalize() <<
-        "' to enable ahead of time compilation\n";
+                 << "Use triple of '" << std::get<0>(HA).normalize()
+                 << "' to enable ahead of time compilation\n";
     // Flush out the buffer before calling the external tool.
     llvm::outs().flush();
     std::vector<StringRef> ToolArgs = {std::get<1>(HA), std::get<2>(HA),
@@ -2603,11 +2618,11 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
 
   if (C.getArgs().hasArg(options::OPT_v)) {
     if (!SystemConfigDir.empty())
-      llvm::errs() << "System configuration file directory: "
-                   << SystemConfigDir << "\n";
+      llvm::errs() << "System configuration file directory: " << SystemConfigDir
+                   << "\n";
     if (!UserConfigDir.empty())
-      llvm::errs() << "User configuration file directory: "
-                   << UserConfigDir << "\n";
+      llvm::errs() << "User configuration file directory: " << UserConfigDir
+                   << "\n";
   }
 
   const ToolChain &TC = C.getDefaultToolChain();
@@ -2680,7 +2695,7 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
     StringRef ProgName = A->getValue();
 
     // Null program name cannot have a path.
-    if (! ProgName.empty())
+    if (!ProgName.empty())
       llvm::outs() << GetProgramPath(ProgName, TC);
 
     llvm::outs() << "\n";
@@ -2905,7 +2920,7 @@ void Driver::BuildUniversalActions(Compilation &C, const ToolChain &TC,
 
   // Add in arch bindings for every top level action, as well as lipo and
   // dsymutil steps if needed.
-  for (Action* Act : SingleActions) {
+  for (Action *Act : SingleActions) {
     // Make sure we can lipo this kind of output. If not (and it is an actual
     // output) then we disallow, since we can't create an output file with the
     // right name without overwriting it. We could remove this oddity by just
@@ -2948,7 +2963,7 @@ void Driver::BuildUniversalActions(Compilation &C, const ToolChain &TC,
 
       // Verify the debug info output.
       if (Args.hasArg(options::OPT_verify_debug_info)) {
-        Action* LastAction = Actions.back();
+        Action *LastAction = Actions.back();
         Actions.pop_back();
         Actions.push_back(C.MakeAction<VerifyDebugInfoJobAction>(
             LastAction, types::TY_Nothing));
@@ -3171,7 +3186,8 @@ void Driver::BuildInputs(const ToolChain &TC, DerivedArgList &Args,
           }
 
           if (Ty == types::TY_INVALID) {
-            if (IsCLMode() && (Args.hasArgNoClaim(options::OPT_E) || CCGenDiagnostics))
+            if (IsCLMode() &&
+                (Args.hasArgNoClaim(options::OPT_E) || CCGenDiagnostics))
               Ty = types::TY_CXX;
             else if (CCCIsCPP() || CCGenDiagnostics)
               Ty = CType;
@@ -3802,7 +3818,7 @@ class OffloadingActionBuilder final {
     virtual void appendLinkDeviceActions(ActionList &AL) {}
 
     /// Append linker host action generated by the builder.
-    virtual Action* appendLinkHostActions(ActionList &AL) { return nullptr; }
+    virtual Action *appendLinkHostActions(ActionList &AL) { return nullptr; }
 
     /// Append linker actions generated by the builder.
     virtual void appendLinkDependences(OffloadAction::DeviceDependences &DA) {}
@@ -4530,15 +4546,15 @@ class OffloadingActionBuilder final {
       for (auto &LI : DeviceLinkerInputs) {
 
         types::ID Output = Args.hasArg(options::OPT_emit_llvm)
-                                   ? types::TY_LLVM_BC
-                                   : types::TY_Image;
+                               ? types::TY_LLVM_BC
+                               : types::TY_Image;
 
         auto *DeviceLinkAction = C.MakeAction<LinkJobAction>(LI, Output);
         // Linking all inputs for the current GPU arch.
         // LI contains all the inputs for the linker.
         OffloadAction::DeviceDependences DeviceLinkDeps;
-        DeviceLinkDeps.add(*DeviceLinkAction, *ToolChains[0],
-            GpuArchList[I], AssociatedOffloadKind);
+        DeviceLinkDeps.add(*DeviceLinkAction, *ToolChains[0], GpuArchList[I],
+                           AssociatedOffloadKind);
         Actions.push_back(C.MakeAction<OffloadAction>(
             DeviceLinkDeps, DeviceLinkAction->getType()));
         ++I;
@@ -4547,8 +4563,8 @@ class OffloadingActionBuilder final {
 
       // If emitting LLVM, do not generate final host/device compilation action
       if (Args.hasArg(options::OPT_emit_llvm)) {
-          AL.append(Actions);
-          return;
+        AL.append(Actions);
+        return;
       }
 
       // Create a host object from all the device images by embedding them
@@ -4569,7 +4585,7 @@ class OffloadingActionBuilder final {
       }
     }
 
-    Action* appendLinkHostActions(ActionList &AL) override { return AL.back(); }
+    Action *appendLinkHostActions(ActionList &AL) override { return AL.back(); }
 
     void appendLinkDependences(OffloadAction::DeviceDependences &DA) override {}
   };
@@ -4712,17 +4728,17 @@ class OffloadingActionBuilder final {
             C.MakeAction<LinkJobAction>(LI, types::TY_Image);
         OffloadAction::DeviceDependences DeviceLinkDeps;
         DeviceLinkDeps.add(*DeviceLinkAction, **TC, /*BoundArch=*/nullptr,
-		        Action::OFK_OpenMP);
+                           Action::OFK_OpenMP);
         AL.push_back(C.MakeAction<OffloadAction>(DeviceLinkDeps,
-            DeviceLinkAction->getType()));
+                                                 DeviceLinkAction->getType()));
         ++TC;
       }
       DeviceLinkerInputs.clear();
     }
 
-    Action* appendLinkHostActions(ActionList &AL) override {
-      // Create wrapper bitcode from the result of device link actions and compile
-      // it to an object which will be added to the host link command.
+    Action *appendLinkHostActions(ActionList &AL) override {
+      // Create wrapper bitcode from the result of device link actions and
+      // compile it to an object which will be added to the host link command.
       auto *BC = C.MakeAction<OffloadWrapperJobAction>(AL, types::TY_LLVM_BC);
       auto *ASM = C.MakeAction<BackendJobAction>(BC, types::TY_PP_Asm);
       return C.MakeAction<AssembleJobAction>(ASM, types::TY_Object);
@@ -5076,9 +5092,9 @@ class OffloadingActionBuilder final {
                 ReplaceFilesAction, types::TY_Object);
           } else {
             auto *Link = C.MakeAction<LinkJobAction>(SYCLLinkBinaryList,
-                                                         types::TY_Image);
-            SYCLLinkBinary = C.MakeAction<SPIRVTranslatorJobAction>(
-                Link, types::TY_Image);
+                                                     types::TY_Image);
+            SYCLLinkBinary =
+                C.MakeAction<SPIRVTranslatorJobAction>(Link, types::TY_Image);
           }
 
           // Remove the SYCL actions as they are already connected to an host
@@ -6051,6 +6067,11 @@ class OffloadingActionBuilder final {
           continue;
 
         auto ParsedArg = Opts.ParseOneArg(Args, Index);
+        if (ParsedArg) {
+          const char *ArchStr = ParsedArg->getValue(0);
+          llvm::outs() << "initGpuArchMap, ParsedArg ArchStr: " << ArchStr
+                       << '\n';
+        }
 
         // TODO: Support --no-cuda-gpu-arch, --{,no-}cuda-gpu-arch=all.
         if (ParsedArg &&
@@ -6247,16 +6268,15 @@ class OffloadingActionBuilder final {
       // Get the SYCL toolchains. If we don't get any, the action builder will
       // know there is nothing to do related to SYCL offloading.
       auto SYCLTCRange = C.getOffloadToolChains<Action::OFK_SYCL>();
-      for (auto TI = SYCLTCRange.first, TE = SYCLTCRange.second; TI != TE;
-           ++TI)
+      for (auto TI = SYCLTCRange.first, TE = SYCLTCRange.second; TI != TE; ++TI)
         ToolChains.push_back(TI->second);
 
       // Nothing to offload if no SYCL Toolchain
       if (ToolChains.empty())
         return false;
 
-      Arg *SYCLLinkTargets = Args.getLastArg(
-                                  options::OPT_fsycl_link_targets_EQ);
+      Arg *SYCLLinkTargets =
+          Args.getLastArg(options::OPT_fsycl_link_targets_EQ);
       WrapDeviceOnlyBinary = Args.hasArg(options::OPT_fsycl_link_EQ);
       auto *DeviceCodeSplitArg =
           Args.getLastArg(options::OPT_fsycl_device_code_split_EQ);
@@ -6267,7 +6287,7 @@ class OffloadingActionBuilder final {
       // Gather information about the SYCL Ahead of Time targets.  The targets
       // are determined on the SubArch values passed along in the triple.
       Arg *SYCLTargets =
-              C.getInputArgs().getLastArg(options::OPT_fsycl_targets_EQ);
+          C.getInputArgs().getLastArg(options::OPT_fsycl_targets_EQ);
       Arg *SYCLAddTargets = Args.getLastArg(options::OPT_fsycl_add_targets_EQ);
       Arg *SYCLfpga = C.getInputArgs().getLastArg(options::OPT_fintelfpga);
       bool HasValidSYCLRuntime = C.getInputArgs().hasFlag(
@@ -6287,15 +6307,18 @@ class OffloadingActionBuilder final {
           Arg *SYCLTargetsValues = SYCLTargets ? SYCLTargets : SYCLLinkTargets;
           // Fill SYCLTripleList
           llvm::StringMap<StringRef> FoundNormalizedTriples;
+          llvm::outs() << "SYCL Targets Values\n";
           for (StringRef Val : SYCLTargetsValues->getValues()) {
+            llvm::outs() << "SYCL Targets Val: " << Val << '\n';
             StringRef UserTargetName(Val);
             if (auto ValidDevice = gen::isGPUTarget<gen::IntelGPU>(Val)) {
               if (ValidDevice->empty())
                 // Unrecognized, we have already diagnosed this earlier; skip.
                 continue;
               // Add the proper -device value to the list.
-              GpuArchList.emplace_back(C.getDriver().MakeSYCLDeviceTriple(
-                                       "spir64_gen"), ValidDevice->data());
+              GpuArchList.emplace_back(
+                  C.getDriver().MakeSYCLDeviceTriple("spir64_gen"),
+                  ValidDevice->data());
               UserTargetName = "spir64_gen";
             } else if (auto ValidDevice =
                            gen::isGPUTarget<gen::NvidiaGPU>(Val)) {
@@ -6348,8 +6371,18 @@ class OffloadingActionBuilder final {
 
           // Fill GpuArchList, end if there are issues in initializingGpuArchMap
           GpuInitHasErrors = initializeGpuArchMap();
-          if (GpuInitHasErrors)
+          if (GpuInitHasErrors) {
+            llvm::outs() << "GpuInitHasErrors!\n";
             return true;
+          }
+
+          for (auto TT : SYCLTripleList) {
+            llvm::outs() << "SYCLTriple = " << TT.getTriple() << '\n';
+          }
+
+          // For AMDGPU/NVPTX
+          // C.getDriver().populateSYCLDeviceTraitsMacrosArgs(Args,
+          // SYCLTripleList);
 
           int I = 0;
           // Fill SYCLTargetInfoList
@@ -6496,6 +6529,24 @@ class OffloadingActionBuilder final {
         // targets are given
         const auto *TC = ToolChains.front();
         SYCLTargetInfoList.emplace_back(TC, nullptr);
+      }
+
+      // ...
+      {
+        // Create a list of Device Target Triple and Offload Arch pairs.
+        using deviceTripleArch_t = std::pair<llvm::Triple, llvm::StringRef>;
+        llvm::SmallVector<deviceTripleArch_t, 4> DeviceTripleOffloadArchList;
+        for (const DeviceTargetInfo& DeviceTI : SYCLTargetInfoList) {
+          DeviceTripleOffloadArchList.push_back(
+              std::make_pair(DeviceTI.TC->getTriple(), DeviceTI.BoundArch));
+        }
+        // ...
+        /*
+        C.getDriver().populateSYCLDeviceTraitsMacrosArgs(
+            C.getInputArgs(), DeviceTripleOffloadArchList);
+        */
+        C.getDriver().populateSYCLDeviceTraitsMacrosArgs(C.getInputArgs(),
+                                                         SYCLTripleList);
       }
 
       checkForOffloadMismatch(C, Args, SYCLTargetInfoList);
@@ -6688,8 +6739,7 @@ public:
     }
 
     SmallVector<std::pair<types::ID, bool>, 4> FPGAAOCTypes = {
-        {types::TY_FPGA_AOCR, false},
-        {types::TY_FPGA_AOCR_EMU, true}};
+        {types::TY_FPGA_AOCR, false}, {types::TY_FPGA_AOCR_EMU, true}};
     for (const auto &ArchiveType : FPGAAOCTypes) {
       bool BinaryFound = hasFPGABinary(C, InputName, ArchiveType.first);
       if (BinaryFound && ArchiveType.second == D.IsFPGAEmulationMode()) {
@@ -6915,7 +6965,7 @@ public:
       return;
 
     // Let builders add host linking actions.
-    Action* HA = nullptr;
+    Action *HA = nullptr;
     for (DeviceActionBuilder *SB : SpecializedBuilders) {
       if (!SB->isValid())
         continue;
@@ -7059,7 +7109,8 @@ void Driver::handleArguments(Compilation &C, DerivedArgList &Args,
                       getOpts().getOption(options::OPT_frtlib_add_rpath));
     }
     // Emitting LLVM while linking disabled except in HIPAMD Toolchain
-    if (Args.hasArg(options::OPT_emit_llvm) && !Args.hasArg(options::OPT_hip_link))
+    if (Args.hasArg(options::OPT_emit_llvm) &&
+        !Args.hasArg(options::OPT_hip_link))
       Diag(clang::diag::err_drv_emit_llvm_link);
     if (IsCLMode() && LTOMode != LTOK_None &&
         !Args.getLastArgValue(options::OPT_fuse_ld_EQ)
@@ -7310,7 +7361,8 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
     // Use the current host action in any of the offloading actions, if
     // required.
     if (!UseNewOffloadingDriver)
-      if (OffloadBuilder->addHostDependenceToDeviceActions(Current, InputArg, Args))
+      if (OffloadBuilder->addHostDependenceToDeviceActions(Current, InputArg,
+                                                           Args))
         break;
 
     for (phases::ID Phase : PL) {
@@ -7387,8 +7439,7 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
       // Use the current host action in any of the offloading actions, if
       // required.
       else if (OffloadBuilder->addHostDependenceToDeviceActions(Current,
-                                                                InputArg,
-                                                                Args))
+                                                                InputArg, Args))
         break;
 
       if (Current->getType() == types::TY_Nothing)
@@ -8513,8 +8564,8 @@ class ToolSelector final {
         continue;
       }
 
-      // This is legal to combine. Append any offload action we found and add the
-      // current input to preprocessor inputs.
+      // This is legal to combine. Append any offload action we found and add
+      // the current input to preprocessor inputs.
       CollapsedOffloadAction.append(PreprocessJobOffloadActions.begin(),
                                     PreprocessJobOffloadActions.end());
       NewInputs.append(PJ->input_begin(), PJ->input_end());
@@ -8537,8 +8588,7 @@ public:
   /// connected to collapsed actions are updated accordingly. The latter enables
   /// the caller of the selector to process them afterwards instead of just
   /// dropping them. If no suitable tool is found, null will be returned.
-  const Tool *getTool(ActionList &Inputs,
-                      ActionList &CollapsedOffloadAction) {
+  const Tool *getTool(ActionList &Inputs, ActionList &CollapsedOffloadAction) {
     //
     // Get the largest chain of actions that we could combine.
     //
@@ -8581,7 +8631,7 @@ public:
     return T;
   }
 };
-}
+} // namespace
 
 /// Return a string that uniquely identifies the result of a job. The bound arch
 /// is not necessarily represented in the toolchain's triple -- for example,
@@ -8773,9 +8823,9 @@ InputInfoList Driver::BuildJobsForActionNoCache(
     StringRef ArchName = BAA->getArchName();
 
     if (!ArchName.empty())
-      TC = &getToolChain(C.getArgs(),
-                         computeTargetTriple(*this, TargetTriple,
-                                             C.getArgs(), ArchName));
+      TC = &getToolChain(
+          C.getArgs(),
+          computeTargetTriple(*this, TargetTriple, C.getArgs(), ArchName));
     else
       TC = &C.getDefaultToolChain();
 
@@ -8825,9 +8875,11 @@ InputInfoList Driver::BuildJobsForActionNoCache(
         C.addCommand(std::move(Cmd));
         continue;
       }
-      ActionResult = CachedResults.at(
-          {SourceAction,
-           GetTriplePlusArchString(TC, BoundArch, TargetDeviceOffloadKind)}).front();
+      ActionResult =
+          CachedResults
+              .at({SourceAction, GetTriplePlusArchString(
+                                     TC, BoundArch, TargetDeviceOffloadKind)})
+              .front();
       InputInfoList InputInfos;
       CollectForEachInputs(InputInfos, SourceAction, TC, BoundArch,
                            TargetDeviceOffloadKind, CachedResults, FEA);
@@ -8841,7 +8893,7 @@ InputInfoList Driver::BuildJobsForActionNoCache(
           C, *SourceAction, std::move(Cmd), InputInfos, ActionResult, Creator,
           "", types::getTypeTempSuffix(ActionResult.getType()), ParallelJobs);
     }
-    return { ActionResult };
+    return {ActionResult};
   }
 
   ActionList Inputs = A->getInputs();
@@ -8998,17 +9050,17 @@ InputInfoList Driver::BuildJobsForActionNoCache(
         if (UI.DependentOffloadKind == Action::OFK_Host && IsFPGAObjLink)
           continue;
         std::string OffloadingPrefix = Action::GetOffloadingFileNamePrefix(
-          UI.DependentOffloadKind,
-          UI.DependentToolChain->getTriple().normalize(),
-          /*CreatePrefixForHost=*/true);
+            UI.DependentOffloadKind,
+            UI.DependentToolChain->getTriple().normalize(),
+            /*CreatePrefixForHost=*/true);
         CurI = InputInfo(
-          UA,
-          GetNamedOutputPath(C, *UA, BaseInput, UI.DependentBoundArch,
-                             /*AtTopLevel=*/false,
-                             MultipleArchs ||
-                                 UI.DependentOffloadKind == Action::OFK_HIP,
-                             OffloadingPrefix),
-          BaseInput);
+            UA,
+            GetNamedOutputPath(C, *UA, BaseInput, UI.DependentBoundArch,
+                               /*AtTopLevel=*/false,
+                               MultipleArchs ||
+                                   UI.DependentOffloadKind == Action::OFK_HIP,
+                               OffloadingPrefix),
+            BaseInput);
       }
       // Save the unbundling result.
       UnbundlingResults.push_back(CurI);
@@ -9115,10 +9167,10 @@ InputInfoList Driver::BuildJobsForActionNoCache(
       // We only have to generate a prefix for the host if this is not a
       // top-level action.
       OffloadingPrefix = Action::GetOffloadingFileNamePrefix(
-        A->getOffloadingDeviceKind(), TC->getTriple().normalize(),
-        /*CreatePrefixForHost=*/isa<OffloadPackagerJobAction>(A) ||
-            !(A->getOffloadingHostActiveKinds() == Action::OFK_None ||
-              AtTopLevel));
+          A->getOffloadingDeviceKind(), TC->getTriple().normalize(),
+          /*CreatePrefixForHost=*/isa<OffloadPackagerJobAction>(A) ||
+              !(A->getOffloadingHostActiveKinds() == Action::OFK_None ||
+                AtTopLevel));
     }
     if (isa<OffloadWrapperJobAction>(JA)) {
       if (Arg *FinalOutput = C.getArgs().getLastArg(options::OPT_o))
@@ -9129,10 +9181,11 @@ InputInfoList Driver::BuildJobsForActionNoCache(
       BaseInput =
           C.getArgs().MakeArgString(std::string(BaseInput) + "-wrapper");
     }
-    Result = InputInfo(A, GetNamedOutputPath(C, *JA, BaseInput, BoundArch,
-                                             AtTopLevel, MultipleArchs,
-                                             OffloadingPrefix),
-                       BaseInput);
+    Result =
+        InputInfo(A,
+                  GetNamedOutputPath(C, *JA, BaseInput, BoundArch, AtTopLevel,
+                                     MultipleArchs, OffloadingPrefix),
+                  BaseInput);
     if (T->canEmitIR() && OffloadingPrefix.empty())
       handleTimeTrace(C, Args, JA, BaseInput, Result);
   }
@@ -9222,8 +9275,7 @@ static bool HasPreprocessOutput(const Action &JA) {
 
 const char *Driver::CreateTempFile(Compilation &C, StringRef Prefix,
                                    StringRef Suffix, bool MultipleArchs,
-                                   StringRef BoundArch,
-                                   types::ID Type,
+                                   StringRef BoundArch, types::ID Type,
                                    bool NeedUniqueDirectory) const {
   SmallString<128> TmpName;
   Arg *A = C.getArgs().getLastArg(options::OPT_fcrash_diagnostics_dir);
@@ -9507,12 +9559,10 @@ const char *Driver::GetNamedOutputPath(Compilation &C, const JobAction &JA,
     }
   } else if (JA.getType() == types::TY_PCH && IsCLMode()) {
     NamedOutput = C.getArgs().MakeArgString(GetClPchPath(C, BaseName));
-  } else if ((JA.getType() == types::TY_Plist || JA.getType() == types::TY_AST) &&
+  } else if ((JA.getType() == types::TY_Plist ||
+              JA.getType() == types::TY_AST) &&
              C.getArgs().hasArg(options::OPT__SLASH_o)) {
-    StringRef Val =
-        C.getArgs()
-            .getLastArg(options::OPT__SLASH_o)
-            ->getValue();
+    StringRef Val = C.getArgs().getLastArg(options::OPT__SLASH_o)->getValue();
     NamedOutput =
         MakeCLOutputFilename(C.getArgs(), Val, BaseName, types::TY_Object);
   } else {
@@ -9817,15 +9867,15 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     case llvm::Triple::Linux:
     case llvm::Triple::ELFIAMCU:
       if (Target.getArch() == llvm::Triple::hexagon)
-        TC = std::make_unique<toolchains::HexagonToolChain>(*this, Target,
-                                                             Args);
+        TC =
+            std::make_unique<toolchains::HexagonToolChain>(*this, Target, Args);
       else if ((Target.getVendor() == llvm::Triple::MipsTechnologies) &&
                !Target.hasEnvironment())
         TC = std::make_unique<toolchains::MipsLLVMToolChain>(*this, Target,
-                                                              Args);
+                                                             Args);
       else if (Target.isPPC())
         TC = std::make_unique<toolchains::PPCLinuxToolChain>(*this, Target,
-                                                              Args);
+                                                             Args);
       else if (Target.getArch() == llvm::Triple::ve)
         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
       else if (Target.isOHOSFamily())
@@ -9867,7 +9917,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         break;
       case llvm::Triple::Itanium:
         TC = std::make_unique<toolchains::CrossWindowsToolChain>(*this, Target,
-                                                                  Args);
+                                                                 Args);
         break;
       case llvm::Triple::MSVC:
       case llvm::Triple::UnknownEnvironment:
@@ -9876,8 +9926,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
           TC = std::make_unique<toolchains::CrossWindowsToolChain>(
               *this, Target, Args);
         else
-          TC =
-              std::make_unique<toolchains::MSVCToolChain>(*this, Target, Args);
+          TC = std::make_unique<toolchains::MSVCToolChain>(*this, Target, Args);
         break;
       }
       break;
@@ -9910,8 +9959,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = std::make_unique<toolchains::TCELEToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::hexagon:
-        TC = std::make_unique<toolchains::HexagonToolChain>(*this, Target,
-                                                             Args);
+        TC =
+            std::make_unique<toolchains::HexagonToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::lanai:
         TC = std::make_unique<toolchains::LanaiToolChain>(*this, Target, Args);
@@ -9927,8 +9976,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = std::make_unique<toolchains::AVRToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::msp430:
-        TC =
-            std::make_unique<toolchains::MSP430ToolChain>(*this, Target, Args);
+        TC = std::make_unique<toolchains::MSP430ToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::riscv32:
       case llvm::Triple::riscv64:
@@ -10140,7 +10188,7 @@ Driver::getOptionVisibilityMask(bool UseDriverMode) const {
     return llvm::opt::Visibility(options::CLOption);
   if (IsDXCMode())
     return llvm::opt::Visibility(options::DXCOption);
-  if (IsFlangMode())  {
+  if (IsFlangMode()) {
     return llvm::opt::Visibility(options::FlangOption);
   }
   return llvm::opt::Visibility(options::ClangOption);
@@ -10290,12 +10338,14 @@ llvm::Error driver::expandResponseFiles(SmallVectorImpl<const char *> &Args,
 
 void Driver::populateSYCLDeviceTraitsMacrosArgs(
     const llvm::opt::ArgList &Args,
-    const llvm::SmallVector<llvm::Triple, 4> &UniqueSYCLTriplesVec) {
+    const llvm::SmallVector<llvm::Triple, 4> &UniqueSYCLTriplesVec) const {
   const auto &TargetTable = DeviceConfigFile::TargetTable;
   std::map<StringRef, unsigned int> AllDevicesHave;
   std::map<StringRef, bool> AnyDeviceHas;
   bool AnyDeviceHasAnyAspect = false;
   unsigned int ValidTargets = 0;
+  // TODO: parse the user input to map the triple + device arch ...
+  // Arg *SYCLTargets = Args.getLastArg(options::OPT_fsycl_targets_EQ)
   for (size_t i = 0; i < Args.size(); ++i) {
     const auto Arg = Args.getArgString(i);
     llvm::outs() << "populate SYCL Device Traits: Arg = " << Arg << '\n';
@@ -10310,7 +10360,7 @@ void Driver::populateSYCLDeviceTraitsMacrosArgs(
     auto TripleIt = TargetTable.end();
 
     for (auto [key, val] : TargetTable) {
-      //llvm::outs() << "TargetTable key = " << key << '\n';
+      // llvm::outs() << "TargetTable key = " << key << '\n';
     }
 
     while (!Found && !EmptyTriple) {
@@ -10321,7 +10371,8 @@ void Driver::populateSYCLDeviceTraitsMacrosArgs(
         EmptyTriple = (Pos == std::string::npos);
         TargetTripleStr =
             EmptyTriple ? TargetTripleStr : TargetTripleStr.substr(0, Pos);
-        llvm::outs() << "Not found, TargetTripleStr = " << TargetTripleStr << '\n';
+        llvm::outs() << "Not found, TargetTripleStr = " << TargetTripleStr
+                     << '\n';
       }
     }
     llvm::outs() << "Final, TargetTripleStr = " << TargetTripleStr << '\n';

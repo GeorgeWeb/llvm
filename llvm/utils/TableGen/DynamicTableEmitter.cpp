@@ -103,6 +103,7 @@ private:
 
   void emitDynamicTable(const DynamicTable &Table, raw_ostream &OS);
   void emitIfdef(Twine Guard, raw_ostream &OS);
+  void emitFuncCheckTripleAndDevice(const DynamicTable &Table, raw_ostream &OS);
 
   bool parseFieldType(GenericField &Field, Init *II);
   void collectTableEntries(DynamicTable &Table,
@@ -110,6 +111,20 @@ private:
 };
 
 } // End anonymous namespace.
+
+void DynamicTableEmitter::emitFuncCheckTripleAndDevice(
+    const DynamicTable &Table, raw_ostream &OS) {
+  for (unsigned I = 0; I < Table.Entries.size(); ++I) {
+    // Record *Entry = Table.Entries[I];
+    for (const auto &[Idx, Field] : enumerate(Table.Fields)) {
+      llvm::outs() << "Field Idx: " << Idx << '\n';
+      llvm::outs() << "Field Name: " << Field.Name << '\n';
+      if (Field.Name == "DeviceId") {
+        // Check that the value of DeviceId is supported triple + device
+      }
+    }
+  }
+}
 
 void DynamicTableEmitter::emitIfdef(Twine Guard, raw_ostream &OS) {
   OS << "#ifdef " << Guard.str() << "\n";
@@ -249,6 +264,10 @@ void DynamicTableEmitter::run(raw_ostream &OS) {
   // Emit everything.
   for (const auto &Table : Tables)
     emitDynamicTable(*Table, OS);
+
+  // ...
+  for (const auto &Table : Tables)
+    emitFuncCheckTripleAndDevice(*Table, OS);
 
   // Put all #undefs last, to allow multiple sections guarded by the same
   // define.

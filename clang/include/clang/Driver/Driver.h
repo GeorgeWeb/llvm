@@ -954,7 +954,7 @@ public:
   /// UniqueSYCLTriplesVec, and defines device traits macros accordingly.
   void populateSYCLDeviceTraitsMacrosArgs(
       const llvm::opt::ArgList &Args,
-      const llvm::SmallVector<llvm::Triple, 4> &UniqueSYCLTriplesVec);
+      const llvm::SmallVector<llvm::Triple, 4> &UniqueSYCLTriplesVec) const;
 
   llvm::opt::ArgStringList getDeviceTraitsMacrosArgs() const {
     return SYCLDeviceTraitsMacrosArgs;
