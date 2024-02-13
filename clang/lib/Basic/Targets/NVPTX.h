@@ -66,11 +66,6 @@ class LLVM_LIBRARY_VISIBILITY NVPTXTargetInfo : public TargetInfo {
   uint32_t PTXVersion;
   std::unique_ptr<TargetInfo> HostTarget;
 
-  /*
-  void populateDeviceTraitsMacros(const LangOptions &Opts,
-                                  MacroBuilder &Builder) const;
-  */
-
 public:
   NVPTXTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts,
                   unsigned TargetPointerWidth);

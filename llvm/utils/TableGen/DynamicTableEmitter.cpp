@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
@@ -115,12 +116,19 @@ private:
 void DynamicTableEmitter::emitFuncCheckTripleAndDevice(
     const DynamicTable &Table, raw_ostream &OS) {
   for (unsigned I = 0; I < Table.Entries.size(); ++I) {
-    // Record *Entry = Table.Entries[I];
+    Record *Entry = Table.Entries[I];
     for (const auto &[Idx, Field] : enumerate(Table.Fields)) {
       llvm::outs() << "Field Idx: " << Idx << '\n';
       llvm::outs() << "Field Name: " << Field.Name << '\n';
       if (Field.Name == "DeviceId") {
         // Check that the value of DeviceId is supported triple + device
+        const StringRef FieldName{Field.Name};
+        auto ValInit = Entry->getValueInit(FieldName);
+        StringRef ValStr = Entry->getValueAsString(FieldName);
+        llvm::outs() << "DeviceId: " << ValStr << "\n";
+        if (ValStr.starts_with("amd_gpu")) {
+          
+        }
       }
     }
   }
