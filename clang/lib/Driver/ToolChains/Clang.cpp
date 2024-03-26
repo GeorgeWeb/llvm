@@ -5540,6 +5540,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-fno-sycl-esimd-build-host-code");
     }
 
+    // TODO: Here this will create a union of args, contradicting the design 
+    // where we need the interscetion for SYCL_ALL_DEVICES_HAVE.
     const auto DeviceTraitsMacrosArgs = D.getDeviceTraitsMacrosArgs();
     for (const auto &Arg : DeviceTraitsMacrosArgs) {
       CmdArgs.push_back(Arg);

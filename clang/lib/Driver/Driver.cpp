@@ -5066,7 +5066,6 @@ class OffloadingActionBuilder final {
         if (CompileDeviceOnly && !SYCLDeviceActions.empty()) {
           for (auto SDA : SYCLDeviceActions)
             SYCLLinkBinaryList.push_back(SDA);
-<<<<<<< HEAD
           if (WrapDeviceOnlyBinary) {
             // -fsycl-link behavior does the following to the unbundled device
             // binaries:
@@ -5127,8 +5126,6 @@ class OffloadingActionBuilder final {
                 C.MakeAction<SPIRVTranslatorJobAction>(Link, types::TY_Image);
           }
 
-=======
->>>>>>> sycl
           // Remove the SYCL actions as they are already connected to an host
           // action or fat binary.
           SYCLDeviceActions.clear();
