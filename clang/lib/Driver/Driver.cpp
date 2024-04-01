@@ -10485,18 +10485,32 @@ void Driver::populateSYCLDeviceTraitsMacrosArgs(
   for (const auto &TargetTriple : UniqueSYCLTriplesVec) {
     // Try and find the whole triple, if there's no match, remove parts of the
     // triple from the end to find partial matches.
-    auto TargetTripleStr = TargetTriple.getTriple();
+    auto TargetTripleStr = TargetTriple.str();
     llvm::outs() << "TargetTripleStr = " << TargetTripleStr << '\n';
     bool Found = false;
     bool EmptyTriple = false;
     auto TripleIt = TargetTable.end();
 
-    for (auto [key, val] : TargetTable) {
-      // llvm::outs() << "TargetTable key = " << key << '\n';
+    for (const auto& [key, val] : TargetTable) {
+      //llvm::outs() << "TargetTable key = " << key << '\n';
     }
 
+    // HERE: checking the triple and bound arch
+    // NOTE: using "TripleIt" as "TargetIt"
+    const std::string TargetArch{""};
+    // END OF HERE
+    
     while (!Found && !EmptyTriple) {
-      TripleIt = TargetTable.find(TargetTripleStr);
+      // HERE: checking the triple and bound arch
+      // NOTE: using "TripleIt" as "TargetIt"
+      if (!TargetArch.empty()) {
+        TripleIt = DeviceConfigFile::FindMatchInTargetTable(
+            TargetTable, TargetTripleStr, TargetArch);
+      } else {
+        TripleIt = TargetTable.find(TargetTripleStr);
+      }
+      // END OF HERE
+      //TripleIt = TargetTable.find(TargetTripleStr);
       Found = (TripleIt != TargetTable.end());
       if (!Found) {
         auto Pos = TargetTripleStr.find_last_of('-');

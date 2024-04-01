@@ -104,6 +104,7 @@ private:
 
   void emitDynamicTable(const DynamicTable &Table, raw_ostream &OS);
   void emitIfdef(Twine Guard, raw_ostream &OS);
+  void emitEndif(Twine Guard, raw_ostream &OS);
   void emitFuncCheckTripleAndDevice(const DynamicTable &Table, raw_ostream &OS);
 
   bool parseFieldType(GenericField &Field, Init *II);
@@ -115,6 +116,9 @@ private:
 
 void DynamicTableEmitter::emitFuncCheckTripleAndDevice(
     const DynamicTable &Table, raw_ostream &OS) {
+  emitIfdef((Twine("GET_") + Table.PreprocessorGuard + "_IMPL"), OS);
+  // START OF FUNCTION
+  OS << "bool FindMatchInTargetTable(std::string, std::string) {\n";
   for (unsigned I = 0; I < Table.Entries.size(); ++I) {
     Record *Entry = Table.Entries[I];
     for (const auto &[Idx, Field] : enumerate(Table.Fields)) {
@@ -126,17 +130,29 @@ void DynamicTableEmitter::emitFuncCheckTripleAndDevice(
         auto ValInit = Entry->getValueInit(FieldName);
         StringRef ValStr = Entry->getValueAsString(FieldName);
         llvm::outs() << "DeviceId: " << ValStr << "\n";
-        if (ValStr.starts_with("amd_gpu")) {
-          
+        if (ValStr.equals("nvptx64-nvidia-cuda") ||
+            ValStr.equals("nvptx-nvidia-cuda")) {
+          // Nvidia
+        } else if (ValStr.equals("amdhsa-amd-amdgcn")) {
+          // AMD
+        } else {
+          // TODO
         }
       }
     }
   }
+  OS << "}";
+  // END OF FUNCTION
+  OS << "#endif\n\n";
 }
 
 void DynamicTableEmitter::emitIfdef(Twine Guard, raw_ostream &OS) {
   OS << "#ifdef " << Guard.str() << "\n";
   PreprocessorGuards.insert(Guard.str());
+}
+
+void DynamicTableEmitter::emitEndif(Twine Guard, raw_ostream &OS) {
+  OS << "#endif\n\n";
 }
 
 void DynamicTableEmitter::emitDynamicTable(const DynamicTable &Table,
