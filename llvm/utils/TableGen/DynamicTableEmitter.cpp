@@ -105,7 +105,6 @@ private:
   void emitDynamicTable(const DynamicTable &Table, raw_ostream &OS);
   void emitIfdef(Twine Guard, raw_ostream &OS);
   void emitEndif(Twine Guard, raw_ostream &OS);
-  void emitFuncCheckTripleAndDevice(const DynamicTable &Table, raw_ostream &OS);
 
   bool parseFieldType(GenericField &Field, Init *II);
   void collectTableEntries(DynamicTable &Table,
@@ -113,38 +112,6 @@ private:
 };
 
 } // End anonymous namespace.
-
-void DynamicTableEmitter::emitFuncCheckTripleAndDevice(
-    const DynamicTable &Table, raw_ostream &OS) {
-  emitIfdef((Twine("GET_") + Table.PreprocessorGuard + "_IMPL"), OS);
-  // START OF FUNCTION
-  OS << "bool FindMatchInTargetTable(std::string, std::string) {\n";
-  for (unsigned I = 0; I < Table.Entries.size(); ++I) {
-    Record *Entry = Table.Entries[I];
-    for (const auto &[Idx, Field] : enumerate(Table.Fields)) {
-      llvm::outs() << "Field Idx: " << Idx << '\n';
-      llvm::outs() << "Field Name: " << Field.Name << '\n';
-      if (Field.Name == "DeviceId") {
-        // Check that the value of DeviceId is supported triple + device
-        const StringRef FieldName{Field.Name};
-        auto ValInit = Entry->getValueInit(FieldName);
-        StringRef ValStr = Entry->getValueAsString(FieldName);
-        llvm::outs() << "DeviceId: " << ValStr << "\n";
-        if (ValStr.equals("nvptx64-nvidia-cuda") ||
-            ValStr.equals("nvptx-nvidia-cuda")) {
-          // Nvidia
-        } else if (ValStr.equals("amdhsa-amd-amdgcn")) {
-          // AMD
-        } else {
-          // TODO
-        }
-      }
-    }
-  }
-  OS << "}";
-  // END OF FUNCTION
-  OS << "#endif\n\n";
-}
 
 void DynamicTableEmitter::emitIfdef(Twine Guard, raw_ostream &OS) {
   OS << "#ifdef " << Guard.str() << "\n";
@@ -288,10 +255,6 @@ void DynamicTableEmitter::run(raw_ostream &OS) {
   // Emit everything.
   for (const auto &Table : Tables)
     emitDynamicTable(*Table, OS);
-
-  // ...
-  for (const auto &Table : Tables)
-    emitFuncCheckTripleAndDevice(*Table, OS);
 
   // Put all #undefs last, to allow multiple sections guarded by the same
   // define.

@@ -116,6 +116,34 @@ StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
     if (SubArch == AArch64SubArch_arm64e)
       return "arm64e";
     break;
+  case Triple::spir:
+    if (SubArch == SPIRSubArch_gen)
+      return "spir_gen";
+    if (SubArch == SPIRSubArch_gen_image)
+      return "spir_gen_image";
+    if (SubArch == SPIRSubArch_fpga)
+      return "spir_fpga";
+    if (SubArch == SPIRSubArch_fpga_image)
+      return "spir_fpga_image";
+    if (SubArch == SPIRSubArch_x86_64)
+      return "spir_x86_64";
+    if (SubArch == SPIRSubArch_x86_64_image)
+      return "spir_x86_64_image";
+    break;
+  case Triple::spir64:
+    if (SubArch == SPIRSubArch_gen)
+      return "spir64_gen";
+    if (SubArch == SPIRSubArch_gen_image)
+      return "spir64_gen_image";
+    if (SubArch == SPIRSubArch_fpga)
+      return "spir64_fpga";
+    if (SubArch == SPIRSubArch_fpga_image)
+      return "spir64_fpga_image";
+    if (SubArch == SPIRSubArch_x86_64)
+      return "spir64_x86_64";
+    if (SubArch == SPIRSubArch_x86_64_image)
+      return "spir64_x86_64_image";
+    break;
   default:
     break;
   }

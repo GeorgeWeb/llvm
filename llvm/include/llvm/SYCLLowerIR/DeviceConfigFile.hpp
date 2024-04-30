@@ -29,9 +29,6 @@ struct TargetInfo {
 };
 using TargetTable_t = std::map<std::string, TargetInfo>;
 
-// prototype
-bool FindMatchInTargetTable(std::string Triple, std::string Arch);
-
 #define GET_TargetTable_IMPL
 #include "llvm/SYCLLowerIR/DeviceConfigFile.inc"
 #undef GET_TargetTable_IMPL
