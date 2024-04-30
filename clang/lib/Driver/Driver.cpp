@@ -6337,12 +6337,9 @@ class OffloadingActionBuilder final {
     void populateSYCLDeviceTraitsMacrosArgs(
         Compilation &C, DerivedArgList &Args,
         SmallVector<DeviceTargetInfo, 4> &Targets) const {
-      /*
-      if (Targets.empty()) {
-        llvm::outs() << "No target:" << C.getDriver().getTargetTriple() << '\n';
+      if (Targets.empty())
         return;
-      }
-      */
+
       const auto &TargetTable = DeviceConfigFile::TargetTable;
       std::map<StringRef, unsigned int> AllDevicesHave;
       std::map<StringRef, bool> AnyDeviceHas;

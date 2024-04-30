@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringRef.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
@@ -104,7 +103,6 @@ private:
 
   void emitDynamicTable(const DynamicTable &Table, raw_ostream &OS);
   void emitIfdef(Twine Guard, raw_ostream &OS);
-  void emitEndif(Twine Guard, raw_ostream &OS);
 
   bool parseFieldType(GenericField &Field, Init *II);
   void collectTableEntries(DynamicTable &Table,
@@ -116,10 +114,6 @@ private:
 void DynamicTableEmitter::emitIfdef(Twine Guard, raw_ostream &OS) {
   OS << "#ifdef " << Guard.str() << "\n";
   PreprocessorGuards.insert(Guard.str());
-}
-
-void DynamicTableEmitter::emitEndif(Twine Guard, raw_ostream &OS) {
-  OS << "#endif\n\n";
 }
 
 void DynamicTableEmitter::emitDynamicTable(const DynamicTable &Table,
