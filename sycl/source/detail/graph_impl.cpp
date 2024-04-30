@@ -184,7 +184,7 @@ void exec_graph_impl::makePartitions() {
   int CurrentPartition = -1;
   std::list<std::shared_ptr<node_impl>> HostTaskList;
   // find all the host-tasks in the graph
-  for (auto Node : MNodeStorage) {
+  for (auto &Node : MNodeStorage) {
     if (Node->MCGType == sycl::detail::CG::CodeplayHostTask) {
       HostTaskList.push_back(Node);
     }
@@ -655,7 +655,7 @@ sycl::detail::pi::PiExtSyncPoint exec_graph_impl::enqueueNodeDirect(
     findRealDeps(Deps, N.lock(), MPartitionNodes[Node]);
   }
   sycl::detail::pi::PiExtSyncPoint NewSyncPoint;
-  sycl::detail::pi::PiExtCommandBufferCommand NewCommand;
+  sycl::detail::pi::PiExtCommandBufferCommand NewCommand = 0;
   pi_int32 Res = sycl::detail::enqueueImpCommandBufferKernel(
       Ctx, DeviceImpl, CommandBuffer,
       *static_cast<sycl::detail::CGExecKernel *>((Node->MCommandGroup.get())),
@@ -757,8 +757,9 @@ void exec_graph_impl::createCommandBuffers(
 exec_graph_impl::exec_graph_impl(sycl::context Context,
                                  const std::shared_ptr<graph_impl> &GraphImpl,
                                  const property_list &PropList)
-    : MSchedule(), MGraphImpl(GraphImpl), MPiSyncPoints(), MContext(Context),
-      MRequirements(), MExecutionEvents(),
+    : MSchedule(), MGraphImpl(GraphImpl), MPiSyncPoints(),
+      MDevice(GraphImpl->getDevice()), MContext(Context), MRequirements(),
+      MExecutionEvents(),
       MIsUpdatable(PropList.has_property<property::graph::updatable>()) {
 
   // If the graph has been marked as updatable then check if the backend
@@ -1155,9 +1156,56 @@ void exec_graph_impl::duplicateNodes() {
   MNodeStorage.insert(MNodeStorage.begin(), NewNodes.begin(), NewNodes.end());
 }
 
+void exec_graph_impl::update(std::shared_ptr<graph_impl> GraphImpl) {
+
+  if (MDevice != GraphImpl->getDevice()) {
+    throw sycl::exception(
+        sycl::make_error_code(errc::invalid),
+        "Cannot update using a graph created with a different device.");
+  }
+  if (MContext != GraphImpl->getContext()) {
+    throw sycl::exception(
+        sycl::make_error_code(errc::invalid),
+        "Cannot update using a graph created with a different context.");
+  }
+
+  if (MNodeStorage.size() != GraphImpl->MNodeStorage.size()) {
+    throw sycl::exception(sycl::make_error_code(errc::invalid),
+                          "Cannot update using a graph with a different "
+                          "topology. Mismatch found in the number of nodes.");
+  } else {
+    for (uint32_t i = 0; i < MNodeStorage.size(); ++i) {
+      if (MNodeStorage[i]->MSuccessors.size() !=
+              GraphImpl->MNodeStorage[i]->MSuccessors.size() ||
+          MNodeStorage[i]->MPredecessors.size() !=
+              GraphImpl->MNodeStorage[i]->MPredecessors.size()) {
+        throw sycl::exception(
+            sycl::make_error_code(errc::invalid),
+            "Cannot update using a graph with a different topology. Mismatch "
+            "found in the number of edges.");
+      }
+
+      if (MNodeStorage[i]->MCGType != GraphImpl->MNodeStorage[i]->MCGType) {
+        throw sycl::exception(
+            sycl::make_error_code(errc::invalid),
+            "Cannot update using a graph with mismatched node types. Each pair "
+            "of nodes being updated must have the same type");
+      }
+    }
+  }
+
+  for (uint32_t i = 0; i < MNodeStorage.size(); ++i) {
+    MIDCache.insert(
+        std::make_pair(GraphImpl->MNodeStorage[i]->MID, MNodeStorage[i]));
+  }
+
+  update(GraphImpl->MNodeStorage);
+}
+
 void exec_graph_impl::update(std::shared_ptr<node_impl> Node) {
   this->update(std::vector<std::shared_ptr<node_impl>>{Node});
 }
+
 void exec_graph_impl::update(
     const std::vector<std::shared_ptr<node_impl>> Nodes) {
 
@@ -1268,7 +1316,6 @@ void exec_graph_impl::updateImpl(std::shared_ptr<node_impl> Node) {
     EliminatedArgMask = SyclKernelImpl->getKernelArgMask();
   } else if (Kernel != nullptr) {
     PiKernel = Kernel->getHandleRef();
-    auto SyclProg = Kernel->getProgramImpl();
     EliminatedArgMask = Kernel->getKernelArgMask();
   } else {
     std::tie(PiKernel, std::ignore, EliminatedArgMask, std::ignore) =
@@ -1469,7 +1516,10 @@ modifiable_command_graph::finalize(const sycl::property_list &PropList) const {
       this->impl, this->impl->getContext(), PropList};
 }
 
-bool modifiable_command_graph::begin_recording(queue &RecordingQueue) {
+void modifiable_command_graph::begin_recording(
+    queue &RecordingQueue, const sycl::property_list &PropList) {
+  std::ignore = PropList;
+
   auto QueueImpl = sycl::detail::getSyclObjImpl(RecordingQueue);
   assert(QueueImpl);
   if (QueueImpl->get_context() != impl->getContext()) {
@@ -1504,56 +1554,46 @@ bool modifiable_command_graph::begin_recording(queue &RecordingQueue) {
     QueueImpl->setCommandGraph(impl);
     graph_impl::WriteLock Lock(impl->MMutex);
     impl->addQueue(QueueImpl);
-    return true;
   }
   if (QueueImpl->getCommandGraph() != impl) {
     throw sycl::exception(sycl::make_error_code(errc::invalid),
                           "begin_recording called for a queue which is already "
                           "recording to a different graph.");
   }
-  // Queue was already recording to this graph.
-  return false;
 }
 
-bool modifiable_command_graph::begin_recording(
-    const std::vector<queue> &RecordingQueues) {
-  bool QueueStateChanged = false;
+void modifiable_command_graph::begin_recording(
+    const std::vector<queue> &RecordingQueues,
+    const sycl::property_list &PropList) {
   for (queue Queue : RecordingQueues) {
-    QueueStateChanged |= this->begin_recording(Queue);
+    this->begin_recording(Queue, PropList);
   }
-  return QueueStateChanged;
 }
 
-bool modifiable_command_graph::end_recording() {
+void modifiable_command_graph::end_recording() {
   graph_impl::WriteLock Lock(impl->MMutex);
-  return impl->clearQueues();
+  impl->clearQueues();
 }
 
-bool modifiable_command_graph::end_recording(queue &RecordingQueue) {
+void modifiable_command_graph::end_recording(queue &RecordingQueue) {
   auto QueueImpl = sycl::detail::getSyclObjImpl(RecordingQueue);
   if (QueueImpl && QueueImpl->getCommandGraph() == impl) {
     QueueImpl->setCommandGraph(nullptr);
     graph_impl::WriteLock Lock(impl->MMutex);
     impl->removeQueue(QueueImpl);
-    return true;
   }
   if (QueueImpl->getCommandGraph() != nullptr) {
     throw sycl::exception(sycl::make_error_code(errc::invalid),
                           "end_recording called for a queue which is recording "
                           "to a different graph.");
   }
-
-  // Queue was not recording to a graph.
-  return false;
 }
 
-bool modifiable_command_graph::end_recording(
+void modifiable_command_graph::end_recording(
     const std::vector<queue> &RecordingQueues) {
-  bool QueueStateChanged = false;
   for (queue Queue : RecordingQueues) {
-    QueueStateChanged |= this->end_recording(Queue);
+    this->end_recording(Queue);
   }
-  return QueueStateChanged;
 }
 
 void modifiable_command_graph::print_graph(std::string path,
@@ -1599,9 +1639,7 @@ void executable_command_graph::finalizeImpl() {
 
 void executable_command_graph::update(
     const command_graph<graph_state::modifiable> &Graph) {
-  (void)Graph;
-  throw sycl::exception(sycl::make_error_code(errc::invalid),
-                        "Method not yet implemented");
+  impl->update(sycl::detail::getSyclObjImpl(Graph));
 }
 
 void executable_command_graph::update(const node &Node) {

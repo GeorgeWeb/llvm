@@ -95,6 +95,20 @@ ESIMD_INLINE simd<T, N> lsc_format_ret(simd<T1, N> Vals) {
   }
 }
 
+/// Extracts a cache hint with the given 'Level' to pass it to
+/// ESIMD/GENX intrinsics. If `PropertyListT` does not have the requested
+/// cache-hint, then 'cache_hint::none' is returned.
+template <typename PropertyListT, cache_level Level>
+constexpr cache_hint getCacheHintForIntrin() {
+  static_assert(Level == cache_level::L1 || Level == cache_level::L2,
+                "ESIMD/GENX intrinsics accept only L1/L2 cache hints");
+  if constexpr (Level == cache_level::L1) {
+    return getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
+  } else {
+    return getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  }
+}
+
 /// USM pointer gather.
 /// Supported platforms: DG2, PVC
 /// VISA instruction: lsc_load.ugm
@@ -123,10 +137,8 @@ __ESIMD_API simd<T, N * NElts> gather_impl(const T *p, simd<OffsetT, N> offsets,
   check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::load, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -167,10 +179,8 @@ __ESIMD_API void scatter_impl(T *p, simd<Toffset, N> offsets,
   check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::store, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -227,17 +237,17 @@ constexpr bool isMaskedGatherScatterLLVMAvailable() {
 /// The next 3 functions are variations of the first 3 above (usm-ga-1,2,3)
 /// and were added only to support simd_view instead of simd for byte_offsets
 /// and/or pass_thru operands.
-/// template <typename T, int N, int VS = 1, typename OffsetObjT,
-///           typename OffsetRegionT, typename PropertyListT = empty_props_t>
+/// template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
+///            typename PropertyListT = empty_props_t>
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             simd_mask<N / VS> mask, simd<T, N> pass_thru,
 ///             PropertyListT props = {});                         // (usm-ga-7)
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             simd_mask<N / VS> mask, PropertyListT props = {}); // (usm-ga-8)
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             PropertyListT props = {});                         // (usm-ga-9)
 
 /// template <typename T, int N, int VS, typename OffsetT,
@@ -355,11 +365,13 @@ gather(const T *p, simd<OffsetT, N / VS> byte_offsets, simd_mask<N / VS> mask,
       auto Ret = __esimd_svm_gather<MsgT, N, detail::ElemsPerAddrEncoding<4>(),
                                     detail::ElemsPerAddrEncoding<1>()>(
           Addrs.data(), mask.data());
+      detail::check_rdregion_params<N * 4, N, /*VS*/ 0, N, 4>();
       return __esimd_rdregion<MsgT, N * 4, N, /*VS*/ 0, N, 4>(Ret, 0);
     } else if constexpr (sizeof(T) == 2) {
       auto Ret = __esimd_svm_gather<MsgT, N, detail::ElemsPerAddrEncoding<2>(),
                                     detail::ElemsPerAddrEncoding<2>()>(
           Addrs.data(), mask.data());
+      detail::check_rdregion_params<N * 2, N, /*VS*/ 0, N, 2>();
       return __esimd_rdregion<MsgT, N * 2, N, /*VS*/ 0, N, 2>(Ret, 0);
     } else {
       return __esimd_svm_gather<MsgT, N, detail::ElemsPerAddrEncoding<1>(),
@@ -490,10 +502,10 @@ gather(const T *p, simd<OffsetT, N> byte_offsets, PropertyListT props = {}) {
   return gather<T, N, VS>(p, byte_offsets, props);
 }
 
-/// template <typename T, int N, int VS = 1, typename OffsetObjT,
-///           typename OffsetRegionT, typename PropertyListT = empty_props_t>
+/// template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
+///            typename PropertyListT = empty_props_t>
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             simd_mask<N / VS> mask, simd<T, N> pass_thru,
 ///             PropertyListT props = {});                         // (usm-ga-7)
 /// Loads ("gathers") elements of the type 'T' from memory locations addressed
@@ -518,19 +530,20 @@ gather(const T *p, simd<OffsetT, N> byte_offsets, PropertyListT props = {}) {
 /// @param props The optional compile-time properties. Only 'alignment'
 /// and cache hint properties are used.
 /// @return A vector of elements read.
-template <typename T, int N, int VS = 1, typename OffsetObjT,
-          typename OffsetRegionT,
+template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
-    ext::oneapi::experimental::is_property_list_v<PropertyListT>, simd<T, N>>
-gather(const T *p, simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
-       simd_mask<N / VS> mask, simd<T, N> pass_thru, PropertyListT props = {}) {
+    ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
+    simd<T, N>>
+gather(const T *p, OffsetSimdViewT byte_offsets, simd_mask<N / VS> mask,
+       simd<T, N> pass_thru, PropertyListT props = {}) {
   return gather<T, N, VS>(p, byte_offsets.read(), mask, pass_thru, props);
 }
 
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             simd_mask<N / VS> mask, PropertyListT props = {}); // (usm-ga-8)
 /// Loads ("gathers") elements of the type 'T' from memory locations addressed
 /// by the base pointer \p p and byte offsets \p byte_offsets, and returns
@@ -552,19 +565,20 @@ gather(const T *p, simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
 /// and cache hint properties are used.
 /// @return A vector of elements read. Elements in masked out lanes are
 ///   undefined.
-template <typename T, int N, int VS = 1, typename OffsetObjT,
-          typename OffsetRegionT,
+template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
-    ext::oneapi::experimental::is_property_list_v<PropertyListT>, simd<T, N>>
-gather(const T *p, simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
-       simd_mask<N / VS> mask, PropertyListT props = {}) {
+    ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
+    simd<T, N>>
+gather(const T *p, OffsetSimdViewT byte_offsets, simd_mask<N / VS> mask,
+       PropertyListT props = {}) {
   return gather<T, N, VS>(p, byte_offsets.read(), mask, props);
 }
 
 /// simd <T, N> gather(const T *p,
-///             simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
+///             OffsetSimdViewT byte_offsets,
 ///             PropertyListT props = {});                         // (usm-ga-9)
 /// Loads ("gathers") elements of the type 'T' from memory locations addressed
 /// by the base pointer \p p and byte offsets \p byte_offsets, and returns
@@ -580,14 +594,14 @@ gather(const T *p, simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
 /// @param props The optional compile-time properties. Only 'alignment'
 /// and cache hint properties are used.
 /// @return A vector of elements read.
-template <typename T, int N, int VS = 1, typename OffsetObjT,
-          typename OffsetRegionT,
+template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
-    ext::oneapi::experimental::is_property_list_v<PropertyListT>, simd<T, N>>
-gather(const T *p, simd_view<OffsetObjT, OffsetRegionT> byte_offsets,
-       PropertyListT props = {}) {
+    ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
+    simd<T, N>>
+gather(const T *p, OffsetSimdViewT byte_offsets, PropertyListT props = {}) {
   return gather<T, N, VS>(p, byte_offsets.read(), props);
 }
 
@@ -691,12 +705,14 @@ scatter(T *p, simd<OffsetT, N / VS> byte_offsets, simd<T, N> vals,
     simd<uint64_t, N> addrs(reinterpret_cast<uint64_t>(p));
     addrs = addrs + byte_offsets_i;
     if constexpr (sizeof(T) == 1) {
+      detail::check_wrregion_params<N * 4, N, /*VS*/ 0, N, 4>();
       simd<T, N * 4> D = __esimd_wrregion<Tx, N * 4, N, /*VS*/ 0, N, 4>(
           D.data(), vals.data(), 0);
       __esimd_svm_scatter<Tx, N, detail::ElemsPerAddrEncoding<4>(),
                           detail::ElemsPerAddrEncoding<1>()>(
           addrs.data(), D.data(), mask.data());
     } else if constexpr (sizeof(T) == 2) {
+      detail::check_wrregion_params<N * 2, N, /*VS*/ 0, N, 2>();
       simd<Tx, N * 2> D = __esimd_wrregion<Tx, N * 2, N, /*VS*/ 0, N, 2>(
           D.data(), vals.data(), 0);
       __esimd_svm_scatter<Tx, N, detail::ElemsPerAddrEncoding<2>(),
@@ -902,10 +918,8 @@ block_load_impl(const T *p, simd_mask<1> pred, simd<T, NElts> pass_thru) {
   using LoadElemT = __ESIMD_DNS::__raw_t<
       std::conditional_t<SmallIntFactor == 1, T,
                          std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
 
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
@@ -1003,10 +1017,8 @@ __ESIMD_API
   using LoadElemT = __ESIMD_DNS::__raw_t<
       std::conditional_t<SmallIntFactor == 1, T,
                          std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size ActualDS =
@@ -1103,10 +1115,8 @@ __ESIMD_API
   using LoadElemT = __ESIMD_DNS::__raw_t<
       std::conditional_t<SmallIntFactor == 1, T,
                          std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size ActualDS =
@@ -1163,10 +1173,8 @@ block_store_impl(T *p, simd<T, NElts> vals, simd_mask<1> pred) {
   using StoreType = __ESIMD_DNS::__raw_t<
       std::conditional_t<SmallIntFactor == 1, T,
                          std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size ActualDS =
@@ -1228,10 +1236,8 @@ __ESIMD_API
   using StoreElemT = __ESIMD_DNS::__raw_t<
       std::conditional_t<SmallIntFactor == 1, T,
                          std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size ActualDS =
@@ -1745,16 +1751,6 @@ block_load(AccessorT acc, detail::DeviceAccessorOffsetT byte_offset,
   return block_load<T, N>(detail::accessorToPointer<T>(acc, byte_offset),
                           props);
 #else  // !__ESIMD_FORCE_STATELESS_MEM
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-
   // If the alignment property is not passed, then assume the pointer
   // is element-aligned.
   constexpr size_t DefaultAlignment = (sizeof(T) <= 4) ? 4 : sizeof(T);
@@ -1820,17 +1816,9 @@ __ESIMD_API std::enable_if_t<
 block_load(AccessorT acc, PropertyListT /* props */ = {}) {
   // Create new properties without the alignment property passed in 'props',
   // and add alignment<16> as it is usable and most favourable in this case.
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-  properties Props{cache_hint_L1<L1Hint>, cache_hint_L2<L2Hint>, alignment<16>};
-  return block_load<T, N>(acc, 0, Props);
+  using NewPropertyListT =
+      detail::add_or_replace_alignment_property_t<PropertyListT, 16>;
+  return block_load<T, N>(acc, 0, NewPropertyListT{});
 }
 
 /// simd<T, N>
@@ -1875,18 +1863,8 @@ __ESIMD_API std::enable_if_t<
 block_load(AccessorT acc, detail::DeviceAccessorOffsetT byte_offset,
            simd_mask<1> pred, simd<T, N> pass_thru,
            PropertyListT /* props */ = {}) {
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-
   // If the alignment property is not passed, then assume the byte_offset
-  // is element-aligned and is at leat 4-bytes.
+  // is element-aligned and is at least 4-bytes.
   constexpr size_t DefaultAlignment = (sizeof(T) <= 4) ? 4 : sizeof(T);
   using NewPropertyListT =
       detail::add_alignment_property_t<PropertyListT, DefaultAlignment>;
@@ -1978,17 +1956,9 @@ block_load(AccessorT acc, simd_mask<1> pred, simd<T, N> pass_thru,
            PropertyListT /* props */ = {}) {
   // Create new properties without the alignment property passed in 'props',
   // and add alignment<16> as it is usable and most favourable in this case.
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-  properties Props{cache_hint_L1<L1Hint>, cache_hint_L2<L2Hint>, alignment<16>};
-  return block_load<T, N>(acc, 0, pred, pass_thru, Props);
+  using NewPropertyListT =
+      detail::add_or_replace_alignment_property_t<PropertyListT, 16>;
+  return block_load<T, N>(acc, 0, pred, pass_thru, NewPropertyListT{});
 }
 
 /// simd<T, N>
@@ -2028,19 +1998,10 @@ __ESIMD_API std::enable_if_t<
 block_load(AccessorT acc, simd_mask<1> pred, PropertyListT /* props */ = {}) {
   // Create new properties without the alignment property passed in 'props',
   // and add alignment<16> as it is usable and most favourable in this case.
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-  properties Props{cache_hint_L1<L1Hint>, cache_hint_L2<L2Hint>, alignment<16>};
-
+  using NewPropertyListT =
+      detail::add_or_replace_alignment_property_t<PropertyListT, 16>;
   simd<T, N> PassThru; // Intentionally uninitialized.
-  return block_load<T, N>(acc, 0, pred, PassThru, Props);
+  return block_load<T, N>(acc, 0, pred, PassThru, NewPropertyListT{});
 }
 
 /// Each of the following block store functions stores a contiguous memory block
@@ -2336,25 +2297,20 @@ block_store(AccessorT acc, detail::DeviceAccessorOffsetT byte_offset,
           DefaultLSCAlignment);
   constexpr bool AlignmentRequiresLSC =
       PropertyListT::template has_property<alignment_key>() && Alignment < 16;
+  using Tx = detail::__raw_t<T>;
+  constexpr unsigned Sz = sizeof(Tx) * N;
+  constexpr bool SzRequiresLSC =
+      Sz < detail::OperandSize::OWORD || Sz % detail::OperandSize::OWORD != 0 ||
+      !detail::isPowerOf2(Sz / detail::OperandSize::OWORD) ||
+      Sz > 8 * detail::OperandSize::OWORD;
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
-                AlignmentRequiresLSC) {
+                AlignmentRequiresLSC || SzRequiresLSC) {
     using NewPropertyListT =
         detail::add_alignment_property_t<PropertyListT, DefaultLSCAlignment>;
     simd_mask<1> Mask = 1;
     detail::block_store_impl<T, N, NewPropertyListT>(acc, byte_offset, vals,
                                                      Mask);
   } else {
-    using Tx = detail::__raw_t<T>;
-    constexpr unsigned Sz = sizeof(Tx) * N;
-    static_assert(Sz >= detail::OperandSize::OWORD,
-                  "block size must be at least 1 oword");
-    static_assert(Sz % detail::OperandSize::OWORD == 0,
-                  "block size must be whole number of owords");
-    static_assert(detail::isPowerOf2(Sz / detail::OperandSize::OWORD),
-                  "block must be 1, 2, 4 or 8 owords long");
-    static_assert(Sz <= 8 * detail::OperandSize::OWORD,
-                  "block size must be at most 8 owords");
-
     auto surf_ind = __esimd_get_surface_index(
         detail::AccessorPrivateProxy::getQualifiedPtrOrImageObj(acc));
     __esimd_oword_st<Tx, N>(surf_ind, byte_offset >> 4, vals.data());
@@ -2401,14 +2357,9 @@ __ESIMD_API std::enable_if_t<
 block_store(AccessorT acc, simd<T, N> vals, PropertyListT props = {}) {
   // Create new properties without the alignment property passed in 'props',
   // and add alignment<16> as it is usable and most favourable in this case.
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  properties Props{cache_hint_L1<L1Hint>, cache_hint_L2<L2Hint>, alignment<16>};
-  block_store<T, N>(acc, 0, vals, Props);
+  using NewPropertyListT =
+      detail::add_or_replace_alignment_property_t<PropertyListT, 16>;
+  block_store<T, N>(acc, 0, vals, NewPropertyListT{});
 }
 
 /// void block_store(AccessorT acc, OffsetT byte_offset,          // (acc-bs-3)
@@ -2493,14 +2444,9 @@ block_store(AccessorT acc, simd<T, N> vals, simd_mask<1> pred,
             PropertyListT props = {}) {
   // Create new properties without the alignment property passed in 'props',
   // and add alignment<16> as it is usable and most favourable in this case.
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  properties Props{cache_hint_L1<L1Hint>, cache_hint_L2<L2Hint>, alignment<16>};
-  block_store<T, N>(acc, 0, vals, pred, Props);
+  using NewPropertyListT =
+      detail::add_or_replace_alignment_property_t<PropertyListT, 16>;
+  block_store<T, N>(acc, 0, vals, pred, NewPropertyListT{});
 }
 
 /// @} sycl_esimd_memory_block
@@ -2589,10 +2535,8 @@ scatter_impl(AccessorTy acc, simd<OffsetT, N> offsets, simd<T, N * NElts> vals,
   check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::store, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -2689,10 +2633,8 @@ gather_impl(AccessorT acc, simd<OffsetT, N / VS> byte_offsets,
   constexpr lsc_vector_size LSCVS = to_lsc_vector_size<VS>();
   constexpr auto Transposed = lsc_data_order::nontranspose;
   using MsgT = typename lsc_expand_type<T>::type;
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   auto SI = get_surface_index(acc);
   simd<uint32_t, N / VS> ByteOffsets32 = convert<uint32_t>(byte_offsets);
   simd<MsgT, N> PassThruExpanded = lsc_format_input<MsgT>(pass_thru);
@@ -2796,10 +2738,8 @@ __ESIMD_API void prefetch_impl(const T *p, simd<Toffset, N> byte_offsets,
   check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::prefetch, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -2817,28 +2757,57 @@ template <typename T, int NElts, lsc_data_size DS, typename PropertyListT,
           typename Toffset>
 __ESIMD_API std::enable_if_t<std::is_integral_v<Toffset>>
 prefetch_impl(const T *p, Toffset offset, simd_mask<1> pred) {
-  check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::prefetch, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+
+  constexpr size_t Alignment =
+      detail::getPropertyValue<PropertyListT, alignment_key>(sizeof(T));
+  static_assert(
+      (Alignment >= __ESIMD_DNS::OperandSize::DWORD && sizeof(T) <= 4) ||
+          (Alignment >= __ESIMD_DNS::OperandSize::QWORD && sizeof(T) > 4),
+      "Incorrect alignment for the data type");
+
+  constexpr int SmallIntFactor64Bit = sizeof(uint64_t) / sizeof(T);
+  constexpr int SmallIntFactor32Bit =
+      sizeof(uint32_t) / sizeof(T) > 1 ? sizeof(uint32_t) / sizeof(T) : 1;
+  static_assert(NElts > 0 && NElts % SmallIntFactor32Bit == 0,
+                "Number of elements is not supported by Transposed load");
+
+  // If alignment >= 8 and (NElts * sizeof(T)) % 8 == 0) we can prefetch QWORDs.
+  // Don't do it for 4-byte vectors (unless it is greater than 256-bytes),
+  // because it would require a bit-cast, which is supposed to be NO-OP, but
+  // might confuse GPU BE sometimes. 1- and 2-byte vectors are casted anyways.
+  constexpr bool Use64BitData =
+      Alignment >= __ESIMD_DNS::OperandSize::QWORD &&
+      (NElts * sizeof(T)) % sizeof(uint64_t) == 0 &&
+      (sizeof(T) != sizeof(uint32_t) || NElts * sizeof(T) > 256);
+  constexpr int SmallIntFactor =
+      Use64BitData ? SmallIntFactor64Bit : SmallIntFactor32Bit;
+  constexpr int FactoredNElts = NElts / SmallIntFactor;
+  check_lsc_vector_size<FactoredNElts>();
+
+  // Prepare template arguments for the call of intrinsic.
+  using LoadElemT = __ESIMD_DNS::__raw_t<
+      std::conditional_t<SmallIntFactor == 1, T,
+                         std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
+
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
-  constexpr lsc_data_size EDS = finalize_data_size<T, DS>();
+  constexpr lsc_data_size EDS = finalize_data_size<LoadElemT, DS>();
 
   static_assert(
       EDS == lsc_data_size::u32 || EDS == lsc_data_size::u64,
       "Transposed prefetch is supported only for data size u32 or u64");
-  constexpr lsc_vector_size LSCVS = to_lsc_vector_size<NElts>();
+  constexpr lsc_vector_size LSCVS = to_lsc_vector_size<FactoredNElts>();
   constexpr lsc_data_order Transposed = lsc_data_order::transpose;
   constexpr int N = 1;
 
   simd<uintptr_t, N> addrs = reinterpret_cast<uintptr_t>(p) + offset;
-  __esimd_lsc_prefetch_stateless<T, L1H, L2H, AddressScale, ImmOffset, EDS,
-                                 LSCVS, Transposed, N>(pred.data(),
-                                                       addrs.data());
+  __esimd_lsc_prefetch_stateless<LoadElemT, L1H, L2H, AddressScale, ImmOffset,
+                                 EDS, LSCVS, Transposed, N>(pred.data(),
+                                                            addrs.data());
 }
 
 #ifndef __ESIMD_FORCE_STATELESS_MEM
@@ -2875,10 +2844,8 @@ prefetch_impl(AccessorTy acc, simd<OffsetT, N> byte_offsets,
   check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::prefetch, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -2919,26 +2886,54 @@ prefetch_impl(AccessorTy acc, OffsetT byte_offset, simd_mask<1> pred) {
                 "Implicit truncation of 64-bit byte_offset to 32-bit is "
                 "disabled. Use -fsycl-esimd-force-stateless-mem or explicitly "
                 "convert offsets to a 32-bit vector");
-  check_lsc_vector_size<NElts>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::prefetch, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+
+  constexpr size_t Alignment =
+      detail::getPropertyValue<PropertyListT, alignment_key>(sizeof(T));
+
+  constexpr int SmallIntFactor64Bit = sizeof(uint64_t) / sizeof(T);
+  constexpr int SmallIntFactor32Bit =
+      sizeof(uint32_t) / sizeof(T) > 1 ? sizeof(uint32_t) / sizeof(T) : 1;
+  static_assert(NElts > 0 && NElts % SmallIntFactor32Bit == 0,
+                "Number of elements is not supported by Transposed load");
+
+  // If alignment >= 8 and (NElts * sizeof(T)) % 8 == 0) we can load QWORDs.
+  // Don't do it for 4-byte vectors (unless it is greater than 256-bytes),
+  // because it would require a bit-cast, which is supposed to be NO-OP, but
+  // might confuse GPU BE sometimes. 1- and 2-byte vectors are casted anyways.
+  constexpr bool Use64BitData =
+      Alignment >= __ESIMD_DNS::OperandSize::QWORD &&
+      (NElts * sizeof(T)) % sizeof(uint64_t) == 0 &&
+      (sizeof(T) != sizeof(uint32_t) || NElts * sizeof(T) > 256);
+  constexpr int SmallIntFactor =
+      Use64BitData ? SmallIntFactor64Bit : SmallIntFactor32Bit;
+  constexpr int FactoredNElts = NElts / SmallIntFactor;
+  check_lsc_vector_size<FactoredNElts>();
+
+  // Prepare template arguments for the call of intrinsic.
+  using LoadElemT = __ESIMD_DNS::__raw_t<
+      std::conditional_t<SmallIntFactor == 1, T,
+                         std::conditional_t<Use64BitData, uint64_t, uint32_t>>>;
+
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
-  constexpr lsc_data_size EDS = finalize_data_size<T, DS>();
+  constexpr lsc_data_size EDS = finalize_data_size<LoadElemT, DS>();
+
   static_assert(
       EDS == lsc_data_size::u32 || EDS == lsc_data_size::u64,
       "Transposed prefetch is supported only for data size u32 or u64");
-  constexpr lsc_vector_size LSCVS = to_lsc_vector_size<NElts>();
+  constexpr lsc_vector_size LSCVS = to_lsc_vector_size<FactoredNElts>();
   constexpr lsc_data_order Transposed = lsc_data_order::transpose;
   constexpr int N = 1;
+
   simd<uint32_t, N> offsets = byte_offset;
   auto SI = get_surface_index(acc);
-  __esimd_lsc_prefetch_bti<T, L1H, L2H, AddressScale, ImmOffset, EDS, LSCVS,
-                           Transposed, N>(pred.data(), offsets.data(), SI);
+  __esimd_lsc_prefetch_bti<LoadElemT, L1H, L2H, AddressScale, ImmOffset, EDS,
+                           LSCVS, Transposed, N>(pred.data(), offsets.data(),
+                                                 SI);
 }
 #endif // __ESIMD_FORCE_STATELESS_MEM
 
@@ -3061,10 +3056,8 @@ __ESIMD_API simd<T, N> load_2d_impl(const T *Ptr, unsigned SurfaceWidth,
                                     unsigned SurfacePitch, int X, int Y) {
 
   check_cache_hints<cache_action::load, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   using RawT = __raw_t<T>;
   check_lsc_block_2d_restrictions<RawT, BlockWidth, BlockHeight, NBlocks,
                                   Transposed, Transformed, block_2d_op::load>();
@@ -3175,10 +3168,8 @@ __ESIMD_API void prefetch_2d_impl(const T *Ptr, unsigned SurfaceWidth,
   check_cache_hints<cache_action::prefetch, PropertyListT>();
   check_lsc_block_2d_restrictions<RawT, BlockWidth, BlockHeight, NBlocks, false,
                                   false, block_2d_op::prefetch>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr lsc_data_size DS =
       finalize_data_size<RawT, lsc_data_size::default_size>();
   uintptr_t Addr = reinterpret_cast<uintptr_t>(Ptr);
@@ -3223,10 +3214,8 @@ __ESIMD_API void store_2d_impl(T *Ptr, unsigned SurfaceWidth,
   using RawT = __raw_t<T>;
   __ESIMD_DNS::check_cache_hints<__ESIMD_DNS::cache_action::store,
                                  PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   check_lsc_block_2d_restrictions<RawT, BlockWidth, BlockHeight, 1, false,
                                   false, block_2d_op::store>();
   constexpr lsc_data_size DS =
@@ -4008,10 +3997,10 @@ gather_rgba(const T *p, simd<Toffset, N> offsets, simd_mask<N> mask = 1) {
 /// @return Read data - up to N*4 values of type \c Tx.
 ///
 template <rgba_channel_mask RGBAMask = rgba_channel_mask::ABGR, typename T,
-          int N, typename OffsetObjT, typename RegionTy>
-__ESIMD_API simd<T, N * get_num_channels_enabled(RGBAMask)>
-gather_rgba(const T *p, simd_view<OffsetObjT, RegionTy> offsets,
-            simd_mask<N> mask = 1) {
+          int N, typename OffsetSimdViewT, typename RegionTy>
+__ESIMD_API std::enable_if_t<detail::is_simd_view_type_v<OffsetSimdViewT>,
+                             simd<T, N * get_num_channels_enabled(RGBAMask)>>
+gather_rgba(const T *p, OffsetSimdViewT offsets, simd_mask<N> mask = 1) {
   return gather_rgba<RGBAMask, T, N>(p, offsets.read(), mask);
 }
 
@@ -4101,9 +4090,9 @@ scatter_rgba(T *p, simd<Toffset, N> offsets,
 ///   undefined.
 ///
 template <rgba_channel_mask RGBAMask = rgba_channel_mask::ABGR, typename T,
-          int N, typename OffsetObjT, typename RegionTy>
-__ESIMD_API void
-scatter_rgba(T *p, simd_view<OffsetObjT, RegionTy> offsets,
+          int N, typename OffsetSimdViewT, typename RegionTy>
+__ESIMD_API std::enable_if_t<detail::is_simd_view_type_v<OffsetSimdViewT>>
+scatter_rgba(T *p, OffsetSimdViewT offsets,
              simd<T, N * get_num_channels_enabled(RGBAMask)> vals,
              simd_mask<N> mask = 1) {
   scatter_rgba<RGBAMask, T, N>(p, offsets.read(), vals, mask);
@@ -4766,8 +4755,8 @@ template <typename T> __ESIMD_API T slm_scalar_load(uint32_t offset) {
 ///
 /// The next 2 functions are variations of the first 2 above (slm-sc-1,2)
 /// and were added only to support simd_view instead of simd for byte_offsets.
-/// template <typename T, int N, int VS = 1, typename OffsetObjT,
-///           typename OffsetRegionT, typename PropertyListT = empty_props_t>
+/// template <typename T, int N, int VS = 1, typename OffsetSimdViewT,
+///            typename PropertyListT = empty_props_t>
 /// void slm_scatter(OffsetSimdViewT byte_offsets,
 ///             simd<T, N> vals, simd_mask<N / VS> mask,
 ///             PropertyListT props = {});                         // (slm-sc-3)
@@ -5834,7 +5823,7 @@ slm_atomic_update_impl(simd<uint32_t, N> offsets, simd<T, N> src0,
   constexpr lsc_vector_size VS = to_lsc_vector_size<1>();
   constexpr lsc_data_order Transposed = lsc_data_order::nontranspose;
   constexpr int IOp = lsc_to_internal_atomic_op<T, Op>();
-  if constexpr (std::is_same_v<T, double>) {
+  if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
     return __esimd_lsc_xatomic_slm_1<T, IOp, cache_hint::none, cache_hint::none,
                                      AddressScale, ImmOffset, EDS, VS,
                                      Transposed, N>(pred.data(), offsets.data(),
@@ -5878,7 +5867,7 @@ __ESIMD_API simd<T, N> slm_atomic_update_impl(simd<uint32_t, N> offsets,
   constexpr lsc_vector_size VS = to_lsc_vector_size<1>();
   constexpr lsc_data_order Transposed = lsc_data_order::nontranspose;
   constexpr int IOp = lsc_to_internal_atomic_op<T, Op>();
-  if constexpr (std::is_same_v<T, double>) {
+  if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
     return __esimd_lsc_xatomic_slm_2<T, IOp, cache_hint::none, cache_hint::none,
                                      AddressScale, ImmOffset, EDS, VS,
                                      Transposed, N>(pred.data(), offsets.data(),
@@ -5938,8 +5927,8 @@ __ESIMD_API simd<T, N> slm_atomic_update_impl(simd<uint32_t, N> offsets,
 template <atomic_op Op, typename T, int N>
 __ESIMD_API std::enable_if_t<__ESIMD_DNS::get_num_args<Op>() == 0, simd<T, N>>
 slm_atomic_update(simd<uint32_t, N> byte_offset, simd_mask<N> mask = 1) {
-  // 2 byte, 8 byte types, non-power of two, and operations wider than 32 are
-  // supported only by LSC.
+  // 2 byte, 8 byte types, non-power of two, and operations wider than
+  // 32 are supported only by LSC.
   if constexpr (sizeof(T) == 2 || sizeof(T) == 8 ||
                 !__ESIMD_DNS::isPowerOf2(N, 32)) {
     return slm_atomic_update_impl<Op, T, N,
@@ -6018,11 +6007,11 @@ template <atomic_op Op, typename T, int N>
 __ESIMD_API std::enable_if_t<__ESIMD_DNS::get_num_args<Op>() == 1, simd<T, N>>
 slm_atomic_update(simd<uint32_t, N> byte_offset, simd<T, N> src0,
                   simd_mask<N> mask = 1) {
-  // 2 byte, 8 byte types, non-power of two, and operations wider than 32 are
-  // supported only by LSC.
-  if constexpr (sizeof(T) == 2 || sizeof(T) == 8 ||
-                !__ESIMD_DNS::isPowerOf2(N, 32)) {
-    // half and short are supported in LSC.
+  // Non-LSC atomic_update supports only 4-byte int vector operations with
+  // 1,2,4,8,16,32 vector length. Non-LSC supports only 'store' for FP types.
+  if constexpr (Op == atomic_op::fmin || Op == atomic_op::fmax ||
+                Op == atomic_op::fadd || Op == atomic_op::fsub ||
+                sizeof(T) != 4 || !__ESIMD_DNS::isPowerOf2(N, 32)) {
     return slm_atomic_update_impl<Op, T, N,
                                   detail::lsc_data_size::default_size>(
         byte_offset, src0, mask);
@@ -6107,9 +6096,9 @@ template <atomic_op Op, typename T, int N>
 __ESIMD_API std::enable_if_t<__ESIMD_DNS::get_num_args<Op>() == 2, simd<T, N>>
 slm_atomic_update(simd<uint32_t, N> byte_offset, simd<T, N> src0,
                   simd<T, N> src1, simd_mask<N> mask = 1) {
-  // 2 byte, 8 byte types, non-power of two, and operations wider than 32 are
-  // supported only by LSC.
-  if constexpr (sizeof(T) == 2 || sizeof(T) == 8 ||
+  // Non-LSC atomic_update supports only 4-byte int vector operations with
+  // 1,2,4,8,16,32 vector length.
+  if constexpr (sizeof(T) != 4 || Op == atomic_op::fcmpxchg ||
                 !__ESIMD_DNS::isPowerOf2(N, 32)) {
     // 2-argument lsc_atomic_update arguments order matches the standard one -
     // expected value first, then new value. But atomic_update uses reverse
@@ -6167,10 +6156,8 @@ atomic_update_impl(T *p, simd<Toffset, N> offsets, simd_mask<N> pred) {
   check_atomic<Op, T, N, 0, /*IsLSC*/ true>();
   check_lsc_data_size<T, DS>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6211,10 +6198,8 @@ atomic_update_impl(T *p, simd<Toffset, N> offsets, simd<T, N> src0,
   check_lsc_data_size<T, DS>();
   check_atomic<Op, T, N, 1, /*IsLSC*/ true>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6257,10 +6242,8 @@ atomic_update_impl(T *p, simd<Toffset, N> offsets, simd<T, N> src0,
   check_lsc_data_size<T, DS>();
   check_atomic<Op, T, N, 2, /*IsLSC*/ true>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6313,10 +6296,8 @@ __ESIMD_API
   check_lsc_data_size<T, DS>();
   check_atomic<Op, T, N, 0, /*IsLSC*/ true>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6368,10 +6349,8 @@ __ESIMD_API
   check_lsc_data_size<T, DS>();
   check_atomic<Op, T, N, 1, /*IsLSC*/ true>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6425,10 +6404,8 @@ __ESIMD_API
   check_lsc_data_size<T, DS>();
   check_atomic<Op, T, N, 2, /*IsLSC*/ true>();
   check_cache_hints<cache_action::atomic, PropertyListT>();
-  constexpr cache_hint L1H =
-      getPropertyValue<PropertyListT, cache_hint_L1_key>(cache_hint::none);
-  constexpr cache_hint L2H =
-      getPropertyValue<PropertyListT, cache_hint_L2_key>(cache_hint::none);
+  constexpr auto L1H = getCacheHintForIntrin<PropertyListT, cache_level::L1>();
+  constexpr auto L2H = getCacheHintForIntrin<PropertyListT, cache_level::L2>();
   constexpr uint16_t AddressScale = 1;
   constexpr int ImmOffset = 0;
   constexpr lsc_data_size EDS = expand_data_size(finalize_data_size<T, DS>());
@@ -6462,10 +6439,10 @@ __ESIMD_API
 /// atomic_update(T *p, simd<Toffset, N> byte_offset,
 ///               props = {});                                  /// (usm-au0-2)
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd_mask<N> mask, props = {});               /// (usm-au0-3)
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               props = {});                                  /// (usm-au0-4)
 ///
 /// Usage of cache hints or non-standard operation width N requires DG2 or PVC.
@@ -6505,7 +6482,7 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd_mask<N> mask,
   static_assert(std::is_integral_v<Toffset>, "Unsupported offset type");
 
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
-                !__ESIMD_DNS::isPowerOf2(N, 32)) {
+                !__ESIMD_DNS::isPowerOf2(N, 32) || sizeof(T) < 4) {
     return detail::atomic_update_impl<
         Op, T, N, detail::lsc_data_size::default_size, PropertyListT, Toffset>(
         p, byte_offset, mask);
@@ -6582,7 +6559,7 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, PropertyListT props = {}) {
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd_mask<N> mask, props = {});               /// (usm-au0-3)
 ///
 /// A variation of \c atomic_update API with \c offsets represented as
@@ -6601,21 +6578,21 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, PropertyListT props = {}) {
 ///   Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 0 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, RegionTy> offsets, simd_mask<N> mask,
+atomic_update(T *p, OffsetSimdViewT offsets, simd_mask<N> mask,
               PropertyListT props = {}) {
   return atomic_update<Op, T, N>(p, offsets.read(), mask, props);
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               props = {});                                  /// (usm-au0-4)
 ///
 /// A variation of \c atomic_update API with \c offsets represented as
@@ -6632,16 +6609,15 @@ atomic_update(T *p, simd_view<OffsetObjT, RegionTy> offsets, simd_mask<N> mask,
 ///   Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 0 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, RegionTy> byte_offset,
-              PropertyListT props = {}) {
+atomic_update(T *p, OffsetSimdViewT byte_offset, PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(p, byte_offset.read(), mask, props);
 }
@@ -6677,11 +6653,11 @@ atomic_update(T *p, Toffset byte_offset, simd_mask<N> mask = 1) {
 ///               simd<T, N> src0, props = {});                  // (usm-au1-2)
 ///
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               simd_mask<N> mask, props = {});                // (usm-au1-3)
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               props = {});                                   // (usm-au1-4)
 ///
@@ -6729,7 +6705,7 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
                 (Op == atomic_op::fmin) || (Op == atomic_op::fmax) ||
                 (Op == atomic_op::fadd) || (Op == atomic_op::fsub) ||
-                !__ESIMD_DNS::isPowerOf2(N, 32)) {
+                !__ESIMD_DNS::isPowerOf2(N, 32) || sizeof(T) < 4) {
     return detail::atomic_update_impl<
         Op, T, N, detail::lsc_data_size::default_size, PropertyListT, Toffset>(
         p, byte_offset, src0, mask);
@@ -6814,7 +6790,7 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               simd_mask<N> mask, props = {});                // (usm-au1-3)
 ///
@@ -6840,21 +6816,21 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 1 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, RegionTy> offsets, simd<T, N> src0,
-              simd_mask<N> mask, PropertyListT props = {}) {
+atomic_update(T *p, OffsetSimdViewT offsets, simd<T, N> src0, simd_mask<N> mask,
+              PropertyListT props = {}) {
   return atomic_update<Op, T, N>(p, offsets.read(), src0, mask, props);
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               props = {});                                   // (usm-au1-4)
 ///
@@ -6878,15 +6854,15 @@ atomic_update(T *p, simd_view<OffsetObjT, RegionTy> offsets, simd<T, N> src0,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 1 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, RegionTy> offsets, simd<T, N> src0,
+atomic_update(T *p, OffsetSimdViewT offsets, simd<T, N> src0,
               PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(p, offsets.read(), src0, mask, props);
@@ -6935,11 +6911,11 @@ atomic_update(Tx *p, Toffset byte_offset, simd<Tx, N> src0, simd_mask<N> mask) {
 ///               props = {});                                  // (usm-au2-2)
 ///
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1,
 ///               simd_mask<N> mask, props = {})                // (usm-au2-3)
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1,
 ///               props = {})                                   // (usm-au2-4)
 ///
@@ -6977,9 +6953,11 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
   static_assert(std::is_integral_v<Toffset>, "Unsupported offset type");
 
   // Use LSC atomic when cache hints are present, FP atomics is used,
-  // non-power of two length is used, or operation width greater than 32.
+  // non-power of two length is used, or operation width greater than 32, or the
+  // data size is less than 4 bytes.
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
-                Op == atomic_op::fcmpxchg || !__ESIMD_DNS::isPowerOf2(N, 32)) {
+                Op == atomic_op::fcmpxchg || !__ESIMD_DNS::isPowerOf2(N, 32) ||
+                sizeof(T) < 4) {
     // 2-argument lsc_atomic_update arguments order matches the standard one -
     // expected value first, then new value. But atomic_update uses reverse
     // order, hence the src1/src0 swap.
@@ -7052,7 +7030,7 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1,
 ///               simd_mask<N> mask, props = {})                // (usm-au2-3)
 ///
@@ -7071,23 +7049,22 @@ atomic_update(T *p, simd<Toffset, N> byte_offset, simd<T, N> src0,
 //    Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename OffsetRegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 2 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
-              simd<T, N> src0, simd<T, N> src1, simd_mask<N> mask,
-              PropertyListT props = {}) {
+atomic_update(T *p, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              simd<T, N> src1, simd_mask<N> mask, PropertyListT props = {}) {
   return atomic_update<Op, T, N>(p, byte_offset.read(), src0, src1, mask,
                                  props);
 }
 
 /// simd<T, N>
-/// atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+/// atomic_update(T *p, OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1,
 ///               props = {})                                   // (usm-au2-4)
 ///
@@ -7104,16 +7081,16 @@ atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
 //    Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename OffsetRegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 2 &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(T *p, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
-              simd<T, N> src0, simd<T, N> src1, PropertyListT props = {}) {
+atomic_update(T *p, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              simd<T, N> src1, PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(p, byte_offset.read(), src0, src1, mask,
                                  props);
@@ -7153,10 +7130,10 @@ atomic_update(Tx *p, Toffset byte_offset, simd<Tx, N> src0, simd<Tx, N> src1,
 /// atomic_update(AccessorT acc, simd<Toffset, N> byte_offset,
 ///               props = {});                                  /// (acc-au0-2)
 /// simd<T, N>
-/// atomic_update(AccessorT acc, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(AccessorT acc, OffsetSimdViewT byte_offset,
 ///               simd_mask<N> mask, props = {});               /// (acc-au0-3)
 /// simd<T, N>
-/// atomic_update(AccessorT acc, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(AccessorT acc, OffsetSimdViewT byte_offset,
 ///               props = {});                                  /// (acc-au0-4)
 ///
 
@@ -7203,20 +7180,10 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd_mask<N> mask,
   return atomic_update<Op, T, N>(__ESIMD_DNS::accessorToPointer<T>(acc),
                                  byte_offset, mask, props);
 #else
-  constexpr auto L1Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L1_key>(
-          cache_hint::none);
-  constexpr auto L2Hint =
-      detail::getPropertyValue<PropertyListT, cache_hint_L2_key>(
-          cache_hint::none);
-  static_assert(!PropertyListT::template has_property<cache_hint_L3_key>(),
-                "L3 cache hint is reserved. The old/experimental L3 LSC cache "
-                "hint is cache_level::L2 now.");
-
   static_assert(std::is_integral_v<Toffset>, "Unsupported offset type");
 
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
-                !detail::isPowerOf2(N, 32)) {
+                !detail::isPowerOf2(N, 32) || sizeof(T) < 4) {
     return detail::atomic_update_impl<
         Op, T, N, detail::lsc_data_size::default_size, PropertyListT>(
         acc, byte_offset, mask);
@@ -7246,7 +7213,7 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd_mask<N> mask,
 }
 
 /// simd<T, N>
-/// atomic_update(AccessorT acc, simd<OffsetObjT, N> byte_offset,
+/// atomic_update(AccessorT acc, simd<Toffset, N> byte_offset,
 ///               props = {});                                  /// (acc-au0-2)
 /// A variation of \c atomic_update API without mask operand
 ///
@@ -7281,7 +7248,7 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset,
 }
 
 /// simd<T, N>
-/// atomic_update(AccessorT acc, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(AccessorT acc, OffsetSimdViewT byte_offset,
 ///               simd_mask<N> mask, props = {});               /// (acc-au0-3)
 /// A variation of \c atomic_update API with \c offsets represented as
 /// \c simd_view object.
@@ -7304,22 +7271,23 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 0 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
-              simd_mask<N> mask, PropertyListT props = {}) {
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset, simd_mask<N> mask,
+              PropertyListT props = {}) {
   return atomic_update<Op, T, N>(acc, byte_offset.read(), mask, props);
 }
 
 /// simd<T, N>
-/// atomic_update(AccessorT acc, simd_view<OffsetObjT, RegionTy> byte_offset,
+/// atomic_update(AccessorT acc, OffsetSimdViewT byte_offset,
 ///               props = {});                                  /// (acc-au0-4)
 /// A variation of \c atomic_update API with \c offsets represented as
 /// \c simd_view object and no mask operand.
@@ -7337,16 +7305,17 @@ atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 0 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset,
               PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(acc, byte_offset.read(), mask, props);
@@ -7419,12 +7388,12 @@ __ESIMD_API
 ///
 /// simd<T, N>
 /// atomic_update(AccessorT acc,
-////              simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+////              OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               simd_mask<N> mask, props = {});                // (acc-au1-3)
 /// simd<T, N>
 /// atomic_update(AccessorT acc,
-///               simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+///               OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               props = {});                                   // (acc-au1-4)
 ///
@@ -7482,7 +7451,7 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
                 Op == atomic_op::fmin || Op == atomic_op::fmax ||
                 Op == atomic_op::fadd || Op == atomic_op::fsub ||
-                !__ESIMD_DNS::isPowerOf2(N, 32)) {
+                !__ESIMD_DNS::isPowerOf2(N, 32) || sizeof(T) < 4) {
     return detail::atomic_update_impl<
         Op, T, N, detail::lsc_data_size::default_size, PropertyListT>(
         acc, byte_offset, src0, mask);
@@ -7556,7 +7525,7 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
 
 /// simd<T, N>
 /// atomic_update(AccessorT acc,
-///               simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+///               OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               simd_mask<N> mask, props = {});                // (acc-au1-3)
 ///
@@ -7586,23 +7555,24 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 1 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
-              simd<T, N> src0, simd_mask<N> mask, PropertyListT props = {}) {
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              simd_mask<N> mask, PropertyListT props = {}) {
   return atomic_update<Op, T, N>(acc, byte_offset.read(), src0, mask, props);
 }
 
 /// simd<T, N>
 /// atomic_update(AccessorT acc,
-///               simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
+///               OffsetSimdViewT byte_offset,
 ///               simd<T, N> src0,
 ///               props = {});                                   // (acc-au1-4)
 ///
@@ -7630,17 +7600,18 @@ atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
 /// @return A vector of the old values at the memory locations before the
 ///   update.
 ///
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename RegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 1 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, RegionTy> byte_offset,
-              simd<T, N> src0, PropertyListT props = {}) {
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(acc, byte_offset.read(), src0, mask, props);
 }
@@ -7719,13 +7690,13 @@ atomic_update(AccessorTy acc, uint32_t offset, simd<Tx, N> src0,
 ///               simd<T, N> src0, simd<T, N> src1,
 ///               props = {});                                   // (acc-au2-2)
 /// simd<T, N>
-/// atomic_update(AccessorTy acc, simd_view<OffsetObjT, OffsetRegionTy>
+/// atomic_update(AccessorTy acc, OffsetSimdViewT
 ///               byte_offset, simd<T, N> src0, simd<T, N> src1,
 ///               simd_mask<N> mask, props = {});                // (acc-au2-3)
 ///
 /// simd<T, N>
 /// atomic_update(AccessorTy acc,
-///               simd_view<OffsetObjT, OffsetRegionTy>, byte_offset,
+///               OffsetSimdViewT, byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1, props = {}); // (acc-au2-4)
 ///
 
@@ -7777,9 +7748,11 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
   static_assert(std::is_integral_v<Toffset>, "Unsupported offset type");
   static_assert(sizeof(Toffset) == 4, "Only 32 bit offset is supported");
   // Use LSC atomic when cache hints are present, FP atomics is used,
-  // non-power of two length is used, or operation width greater than 32.
+  // non-power of two length is used, operation width greater than 32, or the
+  // data size is less than 4 bytes,
   if constexpr (detail::has_cache_hints<PropertyListT>() ||
-                Op == atomic_op::fcmpxchg || !__ESIMD_DNS::isPowerOf2(N, 32)) {
+                Op == atomic_op::fcmpxchg || !__ESIMD_DNS::isPowerOf2(N, 32) ||
+                sizeof(T) < 4) {
     // 2-argument lsc_atomic_update arguments order matches the standard one -
     // expected value first, then new value. But atomic_update uses reverse
     // order, hence the src1/src0 swap.
@@ -7836,7 +7809,7 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
 }
 
 /// simd<T, N>
-/// atomic_update(AccessorTy acc, simd_view<OffsetObjT, OffsetRegionTy>
+/// atomic_update(AccessorTy acc, OffsetSimdViewT
 ///               byte_offset, simd<T, N> src0, simd<T, N> src1,
 ///               simd_mask<N> mask, props = {});              // (acc-au2-3)
 ///
@@ -7858,25 +7831,25 @@ atomic_update(AccessorTy acc, simd<Toffset, N> byte_offset, simd<T, N> src0,
 //    Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename OffsetRegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 2 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
-              simd<T, N> src0, simd<T, N> src1, simd_mask<N> mask,
-              PropertyListT props = {}) {
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              simd<T, N> src1, simd_mask<N> mask, PropertyListT props = {}) {
   return atomic_update<Op, T, N>(acc, byte_offset.read(), src0, src1, mask,
                                  props);
 }
 
 /// simd<T, N>
 /// atomic_update(AccessorTy acc,
-///               simd_view<OffsetObjT, OffsetRegionTy>, byte_offset,
+///               OffsetSimdViewT, byte_offset,
 ///               simd<T, N> src0, simd<T, N> src1, props = {}); // (acc-au2-4)
 ///
 /// A variation of \c atomic_update API with \c byte_offset represented as
@@ -7895,17 +7868,18 @@ atomic_update(AccessorTy acc, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
 //    Other properties are ignored.
 /// @return A vector of the old values at the memory locations before the
 ///   update.
-template <atomic_op Op, typename T, int N, typename OffsetObjT,
-          typename AccessorTy, typename OffsetRegionTy,
+template <atomic_op Op, typename T, int N, typename OffsetSimdViewT,
+          typename AccessorTy,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
 __ESIMD_API std::enable_if_t<
     __ESIMD_DNS::get_num_args<Op>() == 2 &&
         __ESIMD_DNS::is_rw_device_accessor_v<AccessorTy> &&
-        ext::oneapi::experimental::is_property_list_v<PropertyListT>,
+        ext::oneapi::experimental::is_property_list_v<PropertyListT> &&
+        detail::is_simd_view_type_v<OffsetSimdViewT>,
     simd<T, N>>
-atomic_update(AccessorTy acc, simd_view<OffsetObjT, OffsetRegionTy> byte_offset,
-              simd<T, N> src0, simd<T, N> src1, PropertyListT props = {}) {
+atomic_update(AccessorTy acc, OffsetSimdViewT byte_offset, simd<T, N> src0,
+              simd<T, N> src1, PropertyListT props = {}) {
   simd_mask<N> mask = 1;
   return atomic_update<Op, T, N>(acc, byte_offset.read(), src0, src1, mask,
                                  props);
@@ -7978,13 +7952,21 @@ enum fence_mask : uint8_t {
   /// “Commit enable” - wait for fence to complete before continuing.
   global_coherent_fence = 0x1,
   /// Flush the instruction cache.
-  l3_flush_instructions = 0x2,
+  l2_flush_instructions = 0x2,
+  l3_flush_instructions __SYCL_DEPRECATED(
+      "it means L2 here, use l2_flush_instructions") = l2_flush_instructions,
   /// Flush sampler (texture) cache.
-  l3_flush_texture_data = 0x4,
+  l2_flush_texture_data = 0x4,
+  l3_flush_texture_data __SYCL_DEPRECATED(
+      "it means L2 here, use l2_flush_texture_data") = l2_flush_texture_data,
   /// Flush constant cache.
-  l3_flush_constant_data = 0x8,
+  l2_flush_constant_data = 0x8,
+  l3_flush_constant_data __SYCL_DEPRECATED(
+      "it means L2 here, use l2_flush_constant_data") = l2_flush_constant_data,
   /// Flush constant cache.
-  l3_flush_rw_data = 0x10,
+  l2_flush_rw_data = 0x10,
+  l3_flush_rw_data __SYCL_DEPRECATED("it means L2 here, use l2_flush_rw_data") =
+      l2_flush_rw_data,
   /// Issue SLM memory barrier only. If not set, the memory barrier is global.
   local_barrier = 0x20,
   /// Flush L1 read - only data cache.
@@ -7992,7 +7974,7 @@ enum fence_mask : uint8_t {
   /// Creates a software (compiler) barrier, which does not generate
   /// any instruction and only prevents instruction scheduler from
   /// reordering instructions across this barrier at compile time.
-  sw_barrier = 0x80
+  sw_barrier __SYCL_DEPRECATED("reserved - this enum is ignored") = 0x80
 };
 
 /// esimd::fence sets the memory read/write order.
@@ -8959,6 +8941,16 @@ prefetch(const T *p, OffsetSimdViewT byte_offsets, PropertyListT props = {}) {
 /// Prefetches elements of the type 'T' from continuous memory location
 /// addressed by the base pointer \p p, and offset \p byte_offset and the length
 /// \p VS elements into the cache.
+/// The maximum size of a prefetched block is 512 bytes for PVC and 256 bytes
+/// for ACM (DG2). When sizeof(T) is equal to 8 the address must be 8-byte
+/// aligned. Also, 8-byte alignment is required when the function has to load
+/// more than 256-bytes. In all other cases 4-byte alignment is required. When T
+/// is 1- or 2-byte type the data is treated as 4-byte data. Allowed \c VS
+/// values for 64 bit data are 1, 2, 3, 4, 8, 16, 32, 64. Allowed \c VS values
+/// for 32 bit data are 1, 2, 3, 4, 8, 16, 32, 64, 128. Allowed \c VS values for
+/// 16 bit data are 2, 4, 8, 16, 32, 64, 128, 256. Allowed \c VS values for 8
+/// bit data are 4, 8, 12, 16, 32, 64, 128, 256, 512.
+
 /// @tparam T Element type.
 /// @tparam VS Vector size. It specifies the number of consequent elements to
 /// prefetch.
@@ -8966,8 +8958,7 @@ prefetch(const T *p, OffsetSimdViewT byte_offsets, PropertyListT props = {}) {
 /// @param byte_offset offset from the base address.
 /// @param mask The access mask. If it is set to 0, then the prefetch is
 /// omitted.
-/// @param props The optional compile-time properties. Only cache hint
-/// properties are used.
+/// @param props The optional compile-time properties.
 template <typename T, int VS = 1, typename OffsetT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
@@ -9302,6 +9293,15 @@ prefetch(AccessorT acc, OffsetSimdViewT byte_offsets,
 /// Prefetches elements of the type 'T' from continuous memory location
 /// addressed by the accessor \p acc, and offset \p byte_offset and the length
 /// \p VS elements into the cache.
+/// The maximum size of prefetched block is 512 bytes for PVC and 256 bytes for
+/// ACM (DG2). When sizeof(T) equal to 8 the address must be 8-byte aligned.
+/// Also, 8-bytes alignment is required when the function has to load more than
+/// 256-bytes. In all other cases 4-byte alignment is required. When T is 1- or
+/// 2-byte type the data is treated as 4-byte data. Allowed \c VS values for
+/// 64 bit data are 1, 2, 3, 4, 8, 16, 32, 64. Allowed \c VS values for 32
+/// bit data are 1, 2, 3, 4, 8, 16, 32, 64, 128. Allowed \c VS values for 16
+/// bit data are 2, 4, 8, 16, 32, 64, 128, 256. Allowed \c VS values for 8
+/// bit data are 4, 8, 12, 16, 32, 64, 128, 256, 512.
 /// @tparam T Element type.
 /// @tparam VS Vector size. It specifies the number of consequent elements to
 /// prefetch.
@@ -9309,8 +9309,7 @@ prefetch(AccessorT acc, OffsetSimdViewT byte_offsets,
 /// @param byte_offset offset from the base address.
 /// @param mask The access mask. If it is set to 0, then the prefetch is
 /// omitted.
-/// @param props The optional compile-time properties. Only cache hint
-/// properties are used.
+/// @param props The optional compile-time properties.
 template <typename T, int VS = 1, typename AccessorT, typename OffsetT,
           typename PropertyListT =
               ext::oneapi::experimental::detail::empty_properties_t>
