@@ -10725,4 +10725,3 @@ void driver::applyOverrideOptions(SmallVectorImpl<const char *> &Args,
       ++S;
   }
 }
->>>>>>> upstream/sycl
