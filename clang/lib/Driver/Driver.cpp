@@ -49,6 +49,7 @@
 #include "ToolChains/WebAssembly.h"
 #include "ToolChains/XCore.h"
 #include "ToolChains/ZOS.h"
+#include "clang/Basic/Cuda.h"
 #include "clang/Basic/DiagnosticDriver.h"
 #include "clang/Basic/TargetID.h"
 #include "clang/Basic/Version.h"
@@ -65,9 +66,11 @@
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Types.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -98,6 +101,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
+#include "llvm/Support/FormatAdapters.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cstdlib> // ::getenv
 #include <map>
 #include <memory>
@@ -1277,6 +1282,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       }
     }
   }
+
   // We'll need to use the SYCL and host triples as the key into
   // getOffloadingDeviceToolChain, because the device toolchains we're
   // going to create will depend on both.
@@ -1285,8 +1291,41 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
     auto SYCLTC = &getOffloadingDeviceToolChain(C.getInputArgs(), TT, *HostTC,
                                                 Action::OFK_SYCL);
     C.addOffloadDeviceToolChain(SYCLTC, Action::OFK_SYCL);
+    // ...
+    llvm::StringMap<llvm::DenseSet<StringRef>> DerivedArchs;
+    if (C.getInputArgs().getLastArgValue(options::OPT_offload_arch_EQ) == "native") {
+      for (auto &TT : UniqueSYCLTriplesVec) {
+        if (TT.isNVPTX() || TT.isAMDGCN()) {
+          llvm::DenseSet<StringRef> Archs;
+          if (TT.isNVPTX()) {
+            for (StringRef Arch : getOffloadArchs(
+                      C, C.getArgs(), Action::OFK_SYCL, SYCLTC, true))
+              Archs.insert(Arch);
+          } else if (TT.isAMDGCN()) {
+            for (StringRef Arch : getOffloadArchs(
+                      C, C.getArgs(), Action::OFK_SYCL, SYCLTC, true))
+              Archs.insert(Arch);
+          }
+          for (StringRef Arch : Archs) {
+            if (TT.isNVPTX() && IsNVIDIAGpuArch(StringToCudaArch(
+                                    getProcessorFromTargetID(TT, Arch)))) {
+              DerivedArchs[TT.getTriple()].insert(Arch);
+            } else if (TT.isAMDGCN() &&
+                        IsAMDGpuArch(StringToCudaArch(
+                            getProcessorFromTargetID(TT, Arch)))) {
+              DerivedArchs[TT.getTriple()].insert(Arch);
+            } else {
+              Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
+              return;
+            }
+          }
+        }
+      }
+    }
+    /*
     if (DerivedArchs.contains(TT.getTriple()))
       KnownArchs[SYCLTC] = DerivedArchs[TT.getTriple()];
+    */
   }
 
   //
@@ -4816,6 +4855,7 @@ class OffloadingActionBuilder final {
     /// List of GPU architectures to use in this compilation with NVPTX/AMDGCN
     /// targets.
     SmallVector<std::pair<llvm::Triple, const char *>, 8> GpuArchList;
+    llvm::StringMap<SmallVector<std::string>> NativeArchs;
 
     /// Build the last steps for CUDA after all BC files have been linked.
     JobAction *finalizeNVPTXDependences(Action *Input, const llvm::Triple &TT) {
@@ -4855,7 +4895,6 @@ class OffloadingActionBuilder final {
                       OffloadingActionBuilder &OAB)
         : DeviceActionBuilder(C, Args, Inputs, Action::OFK_SYCL, OAB),
           SYCLInstallation(C.getDriver()) {}
-
     void withBoundArchForToolChain(const ToolChain *TC,
                                    llvm::function_ref<void(const char *)> Op) {
       for (auto &A : GpuArchList) {
@@ -5986,6 +6025,27 @@ class OffloadingActionBuilder final {
     // used in the SYCLToolChain for SPIR-V AOT to track the offload
     // architecture instead of the Triple sub-arch it currently uses.
     bool initializeGpuArchMap() {
+      // ...
+      [[maybe_unused]]
+      auto getCudaNativeArch = [&](const llvm::Triple& Triple) -> std::string {
+        const ToolChain *TempHostTC =
+            C.getSingleOffloadToolChain<Action::OFK_Host>();
+        auto TempCudaTC = std::make_unique<toolchains::CudaToolChain>(
+            C.getDriver(), Triple, *TempHostTC, C.getInputArgs(),
+            Action::OFK_None);
+        auto ArchsOrErr = TempCudaTC->getSystemGPUArchs(Args);
+        if (!ArchsOrErr) {
+          // Suppress the error if no GPU has been found.
+          llvm::consumeError(ArchsOrErr.takeError());
+          // Maybe add a warning to say that no GPU has been found on the
+          // system, hence using the default Cuda capability.
+        }
+        // In case of multiple Nvidia GPUs, this will give only the first
+        // detected GPU arches. However, this is currently okay, until we
+        // have to support multiple sm_<cap> values for '--offload-arch'.
+        return std::string(ArchsOrErr->front());
+      };
+     
       const OptTable &Opts = C.getDriver().getOpts();
       for (auto *A : Args) {
         unsigned Index;
@@ -5993,7 +6053,7 @@ class OffloadingActionBuilder final {
 
         auto GetTripleIt = [&, this](llvm::StringRef Triple) {
           llvm::Triple TargetTriple{Triple};
-          auto TripleIt = llvm::find_if(SYCLTripleList, [&](auto &SYCLTriple) {
+          auto *TripleIt = llvm::find_if(SYCLTripleList, [&](auto &SYCLTriple) {
             return SYCLTriple == TargetTriple;
           });
           return TripleIt != SYCLTripleList.end() ? &*TripleIt : nullptr;
@@ -6015,8 +6075,9 @@ class OffloadingActionBuilder final {
           // Passing device args: -Xsycl-target-backend -opt=val.
           TargetBE = &SYCLTripleList.front();
           Index = Args.getBaseArgs().MakeIndex(A->getValue(0));
-        } else
+        } else {
           continue;
+        }
 
         auto ParsedArg = Opts.ParseOneArg(Args, Index);
 
@@ -6025,7 +6086,15 @@ class OffloadingActionBuilder final {
             ParsedArg->getOption().matches(options::OPT_offload_arch_EQ)) {
           const char *ArchStr = ParsedArg->getValue(0);
           if (TargetBE->isNVPTX()) {
-            // CUDA arch also applies to AMDGCN ...
+            ///*
+            const std::string NativeArchStr = getCudaNativeArch(*TargetBE);
+            NativeArchs[TargetBE->getTriple()].push_back(NativeArchStr);
+            if (constexpr StringRef OffloadArchNative{"native"};
+                ArchStr == OffloadArchNative) {
+              ArchStr = NativeArchs[TargetBE->getTriple()].front().c_str();
+            }
+            //*/
+            // CUDA arch also applies to AMDGCN (for HIP on Nvidia)...
             CudaArch Arch = StringToCudaArch(ArchStr);
             if (Arch == CudaArch::UNKNOWN || !IsNVIDIAGpuArch(Arch)) {
               C.getDriver().Diag(clang::diag::err_drv_cuda_bad_gpu_arch)
@@ -6437,6 +6506,11 @@ class OffloadingActionBuilder final {
                   OffloadArch = A.second;
                   break;
                 }
+              }
+              if (!OffloadArch) {
+                // TODO:
+                // auto Toolchain = *TCIt;
+                // OffloadArch = C.getDriver().KnownArchs[Toolchain].first();
               }
               assert(OffloadArch && "Failed to find matching arch.");
               SYCLTargetInfoList.emplace_back(*TCIt, OffloadArch);
@@ -7992,6 +8066,7 @@ Action *Driver::BuildOffloadingActions(Compilation &C,
   } else {
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
+    llvm::outs() << "Package all the offloading actions into a single output\n";
     Action *PackagerAction =
         C.MakeAction<OffloadPackagerJobAction>(OffloadActions, types::TY_Image);
     DDep.add(*PackagerAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
