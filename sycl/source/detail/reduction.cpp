@@ -6,6 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "detail/context_impl.hpp"
+#include "sycl/backend_types.hpp"
+#include "detail/kernel_bundle_impl.hpp"
 #include <detail/config.hpp>
 #include <detail/memory_manager.hpp>
 #include <detail/queue_impl.hpp>
@@ -14,6 +17,14 @@
 namespace sycl {
 inline namespace _V1 {
 namespace detail {
+
+__SYCL_EXPORT sycl::kernel reduGetKernelObj(std::shared_ptr<queue_impl> Queue,
+                                            detail::string_view KernelName) {
+  auto KernelId = detail::get_kernel_id_impl(KernelName);
+  auto KernelBundleImpl = detail::get_kernel_bundle_impl(
+      Queue->get_context(), {Queue->get_device()}, bundle_state::executable);
+  return KernelBundleImpl->get_kernel(KernelId, KernelBundleImpl);
+}
 
 // TODO: The algorithm of choosing the work-group size is definitely
 // imperfect now and can be improved.
@@ -110,7 +121,33 @@ reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
     WGSize /= 2;
   }
 
+  // Terrible consrevative workaround without access to kernel properties.
+  if (Dev.get_backend() == sycl::backend::ext_oneapi_cuda) {
+    using namespace sycl::ext::codeplay;
+    const uint32_t MaxRegsPerWG = Dev.get_info<
+        experimental::info::device::max_registers_per_work_group>();
+    // Maximum number of 32-bit registers per thread in CUDA is 255.
+    constexpr uint32_t MaxRegsPerWI = 255;
+    while (WGSize * MaxRegsPerWI > MaxRegsPerWG) {
+      WGSize /= 2;
+    }
+  }
+
   return WGSize;
+}
+
+__SYCL_EXPORT size_t
+reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
+                 const sycl::kernel& Kernel,
+                 size_t LocalMemBytesPerWorkItem) {
+  device Dev = Queue->get_device();
+  size_t MaxWGSize =
+      Kernel.get_info<sycl::info::kernel_device_specific::work_group_size>(Dev);
+  // Handle case where the backend does not have an implementation of the query.
+  if (MaxWGSize == 0) {
+    return reduGetMaxWGSize(Queue, LocalMemBytesPerWorkItem);
+  }
+  return MaxWGSize;
 }
 
 __SYCL_EXPORT size_t reduGetPreferredWGSize(std::shared_ptr<queue_impl> &Queue,

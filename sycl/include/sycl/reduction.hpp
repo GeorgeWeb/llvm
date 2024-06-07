@@ -148,8 +148,13 @@ template <typename... Ts> ReduTupleT<Ts...> makeReduTupleT(Ts... Elements) {
   return sycl::detail::make_tuple(Elements...);
 }
 
+__SYCL_EXPORT sycl::kernel reduGetKernelObj(std::shared_ptr<queue_impl> Queue,
+                                            detail::string_view KernelName);
 __SYCL_EXPORT size_t reduGetMaxWGSize(std::shared_ptr<queue_impl> Queue,
                                       size_t LocalMemBytesPerWorkItem);
+__SYCL_EXPORT size_t
+reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
+                 const sycl::kernel &Kernel, size_t LocalMemBytesPerWorkItem);
 __SYCL_EXPORT size_t reduComputeWGSize(size_t NWorkItems, size_t MaxWGSize,
                                        size_t &NWorkGroups);
 __SYCL_EXPORT size_t reduGetPreferredWGSize(std::shared_ptr<queue_impl> &Queue,
@@ -1396,6 +1401,11 @@ inline size_t GreatestPowerOfTwo(size_t N) {
   return Ret;
 }
 
+/// Check if the (unsigned) value of N is a power-of-two.
+inline bool IsPowerOfTwo(size_t N) noexcept {
+  return (N & (N - 1)) == 0;
+}
+
 template <typename FuncTy>
 void doTreeReductionHelper(size_t WorkSize, size_t LID, FuncTy Func) {
   workGroupBarrier();
@@ -1684,6 +1694,20 @@ struct NDRangeReduction<
   }
 };
 
+template <template <typename, reduction::strategy, typename...> class MainOrAux,
+          class KernelName, reduction::strategy Strategy, class... Ts>
+size_t getReduKernelMaxWGSize(std::shared_ptr<detail::queue_impl> Queue,
+                              size_t LocalMemBytesPerWorkItem) {
+  // TODO: currently the maximal work group size is determined for the given
+  // queue/device, while it may be safer to use queries to the kernel compiled
+  // for the device.
+  using KI = sycl::detail::KernelInfo<
+      __sycl_reduction_kernel<MainOrAux, KernelName, Strategy, Ts...>>;
+  kernel Kernel = reduGetKernelObj(Queue, detail::string_view{KI::getName()});
+  size_t MaxWGSize = reduGetMaxWGSize(Queue, Kernel, LocalMemBytesPerWorkItem);
+  return MaxWGSize;
+}
+
 template <>
 struct NDRangeReduction<
     reduction::strategy::group_reduce_and_multiple_kernels> {
@@ -1710,6 +1734,10 @@ struct NDRangeReduction<
     // queue/device, while it may be safer to use queries to the kernel compiled
     // for the device.
     size_t MaxWGSize = reduGetMaxWGSize(Queue, OneElemSize);
+    MaxWGSize = getReduKernelMaxWGSize<
+        reduction::MainKrn, KernelName,
+        reduction::strategy::group_reduce_and_multiple_kernels>(Queue,
+                                                                OneElemSize);
     if (NDRange.get_local_range().size() > MaxWGSize)
       throw sycl::exception(make_error_code(errc::nd_range),
                             "The implementation handling parallel_for with"
@@ -1768,7 +1796,11 @@ struct NDRangeReduction<
       reduction::withAuxHandler(CGH, [&](handler &AuxHandler) {
         size_t NElements = Reduction::num_elements;
         size_t NWorkGroups;
-        size_t WGSize = reduComputeWGSize(NWorkItems, MaxWGSize, NWorkGroups);
+        MaxWGSize = getReduKernelMaxWGSize<
+            reduction::AuxKrn, KernelName,
+            reduction::strategy::group_reduce_and_multiple_kernels>(Queue,
+                                                                OneElemSize);
+        size_t WGSize = reduComputeWGSize(NWorkItems, WGSize, NWorkGroups);
 
         // The last work-group may be not fully loaded with work, or the work
         // group size may be not power of two. Those two cases considered
@@ -1934,6 +1966,11 @@ template <> struct NDRangeReduction<reduction::strategy::basic> {
 
     // TODO: Create a special slow/sequential version of the kernel that would
     // handle the reduction instead of reporting an assert below.
+    const size_t MaxWGSizeOneWG = getReduKernelMaxWGSize<
+        reduction::AuxKrn, KernelName, reduction::strategy::basic, KernelMultipleWGTag>(Queue, OneElemSize);
+    const size_t MaxWGSizeMultiWG = getReduKernelMaxWGSize<
+        reduction::AuxKrn, KernelName, reduction::strategy::basic, KernelOneWGTag>(Queue, OneElemSize);
+    MaxWGSize = std::max(MaxWGSizeOneWG, MaxWGSizeMultiWG);
     if (MaxWGSize <= 1)
       throw sycl::exception(make_error_code(errc::nd_range),
                             "The implementation handling parallel_for with "
