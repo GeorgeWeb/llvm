@@ -1896,7 +1896,6 @@ static bundle_state getBinImageState(const RTDeviceBinaryImage *BinImage) {
 
 kernel_id ProgramManager::getSYCLKernelID(const std::string &KernelName) {
   std::lock_guard<std::mutex> KernelIDsGuard(m_KernelIDsMutex);
-
   auto KernelID = m_KernelName2KernelIDs.find(KernelName);
   if (KernelID == m_KernelName2KernelIDs.end())
     throw exception(make_error_code(errc::runtime),

@@ -9,6 +9,11 @@
 #include "detail/context_impl.hpp"
 #include "sycl/backend_types.hpp"
 #include "detail/kernel_bundle_impl.hpp"
+#include "sycl/context.hpp"
+#include "sycl/info/info_desc.hpp"
+#include "sycl/kernel_bundle.hpp"
+#include "sycl/kernel_bundle_enums.hpp"
+#include <cstdint>
 #include <detail/config.hpp>
 #include <detail/memory_manager.hpp>
 #include <detail/queue_impl.hpp>
@@ -18,12 +23,16 @@ namespace sycl {
 inline namespace _V1 {
 namespace detail {
 
-__SYCL_EXPORT sycl::kernel reduGetKernelObj(std::shared_ptr<queue_impl> Queue,
-                                            detail::string_view KernelName) {
-  auto KernelId = detail::get_kernel_id_impl(KernelName);
-  auto KernelBundleImpl = detail::get_kernel_bundle_impl(
-      Queue->get_context(), {Queue->get_device()}, bundle_state::executable);
-  return KernelBundleImpl->get_kernel(KernelId, KernelBundleImpl);
+__SYCL_EXPORT kernel reduGetKernelExec(std::shared_ptr<queue_impl> Queue,
+                                       std::string_view KernelName) {
+  std::cout << "Kernel Name: " << KernelName.data() << '\n';
+  context Ctx = Queue->get_context();
+  device Device = Queue->get_device();
+  auto KernelId = get_kernel_id_impl(KernelName);
+  static constexpr bundle_state State{bundle_state::executable};
+  auto KernelBundleImpl = get_kernel_bundle_impl(Ctx, {Device}, State);
+  auto Kernel = KernelBundleImpl->get_kernel(KernelId, KernelBundleImpl);
+  return Kernel;
 }
 
 // TODO: The algorithm of choosing the work-group size is definitely
@@ -57,8 +66,20 @@ __SYCL_EXPORT size_t reduComputeWGSize(size_t NWorkItems, size_t MaxWGSize,
       }
     }
   }
+  std::cout << "Maximum WorkGroup Size: " << MaxWGSize << '\n';
+  std::cout << "Compute WorkGroup Size: " << WGSize << '\n';
   return WGSize;
 }
+
+__SYCL_EXPORT bool
+reduShouldUseKernelBundle(std::shared_ptr<queue_impl> Queue) {
+  if (!Queue)
+    return false;
+
+  const device Device = Queue->get_device();
+  const backend Backend = Device.get_backend();
+  return SYCLConfig<SYCL_REDUCTION_ENABLE_USE_KERNEL_BUNDLES>::get(Backend);
+};
 
 // Returns the estimated number of physical threads on the device associated
 // with the given queue.
@@ -83,9 +104,15 @@ __SYCL_EXPORT uint32_t reduGetMaxNumConcurrentWorkGroups(
   return NumThreads;
 }
 
+/// Check if the (unsigned) value of N is a power-of-two.
+inline bool IsPowerOfTwo(size_t N) noexcept {
+  return (N & (N - 1)) == 0;
+}
+
 __SYCL_EXPORT size_t
 reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
                  size_t LocalMemBytesPerWorkItem) {
+  std::cout << "GetMaxWGSize from device query.\n";
   device Dev = Queue->get_device();
   size_t MaxWGSize = Dev.get_info<sycl::info::device::max_work_group_size>();
 
@@ -110,7 +137,7 @@ reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
   // if (WGSize * LocalMemBytesPerWorkItem) is equal to local_mem_size, then
   // the reduction local accessor takes all available local memory for it needs
   // not leaving any local memory for other kernel needs (barriers,
-  // builtin calls, etc), which often leads to crushes with CL_OUT_OF_RESOURCES
+  // builtin calls, etc), which often leads to crashes with OUT_OF_RESOURCES
   // error, or in even worse cases it may cause silent writes/clobbers of
   // the local memory assigned to one work-group by code in another work-group.
   // It seems the only good solution for this work-group detection problem is
@@ -121,37 +148,45 @@ reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
     WGSize /= 2;
   }
 
+  ///*
   // Terrible consrevative workaround without access to kernel properties.
-  if (Dev.get_backend() == sycl::backend::ext_oneapi_cuda) {
-    using namespace sycl::ext::codeplay;
+  std::cout << "WGSize before conservative regs workaround: " << WGSize << '\n';
+  size_t NewWGSize{WGSize};
+  if (Dev.get_backend() == backend::ext_oneapi_cuda) {
+    namespace codeplay = sycl::ext::codeplay;
     const uint32_t MaxRegsPerWG = Dev.get_info<
-        experimental::info::device::max_registers_per_work_group>();
-    // Maximum number of 32-bit registers per thread in CUDA is 255.
-    constexpr uint32_t MaxRegsPerWI = 255;
-    while (WGSize * MaxRegsPerWI > MaxRegsPerWG) {
-      WGSize /= 2;
-    }
+        codeplay::experimental::info::device::max_registers_per_work_group>();
+    // Assumes using max number of 32-bit registers per thread in CUDA (255).
+    // see: link-to-cuda-cap-table
+    constexpr uint8_t MaxRegsPerWI{255};
+    while (NewWGSize * MaxRegsPerWI > MaxRegsPerWG || !IsPowerOfTwo(NewWGSize))
+      NewWGSize--;
   }
-
+  std::cout << "WGSize after conservative regs workaround: " << NewWGSize << '\n';
+  //*/
   return WGSize;
 }
 
 __SYCL_EXPORT size_t
 reduGetMaxWGSize(std::shared_ptr<sycl::detail::queue_impl> Queue,
                  const sycl::kernel& Kernel,
-                 size_t LocalMemBytesPerWorkItem) {
-  device Dev = Queue->get_device();
+                 size_t LocalMemBytesPerWorkItem = 0) {
+  std::cout << "GetMaxWGSize from kernel query.\n";
+  device Device = Queue->get_device();
   size_t MaxWGSize =
-      Kernel.get_info<sycl::info::kernel_device_specific::work_group_size>(Dev);
+      Kernel.get_info<info::kernel_device_specific::work_group_size>(Device);
+
   // Handle case where the backend does not have an implementation of the query.
-  if (MaxWGSize == 0) {
+  if (MaxWGSize == 0)
     return reduGetMaxWGSize(Queue, LocalMemBytesPerWorkItem);
-  }
+
+  std::cout << "[reduGetMaxWGSize] MaxWGSize: " << MaxWGSize << '\n';
   return MaxWGSize;
 }
 
 __SYCL_EXPORT size_t reduGetPreferredWGSize(std::shared_ptr<queue_impl> &Queue,
                                             size_t LocalMemBytesPerWorkItem) {
+  std::cout << "reduGetPreferredWGSize check\n";
   // TODO: Graphs extension explicit API uses a handler with a null queue to
   // process CGFs, in future we should have access to the device so we can
   // correctly calculate this.
