@@ -92,6 +92,29 @@ kernel::get_info(const device &Device, const range<3> &WGSize) const {
       "Unexpected param for kernel::get_info with range argument.");
   return impl->get_info<Param>(Device, WGSize);
 }
+      
+template <typename Param, typename... TArgs>
+typename detail::is_kernel_queue_specific_info_desc<Param>::return_type
+kernel::ext_oneapi_get_info_new_impl(TArgs... Args) const {
+  constexpr size_t NArgs = sizeof...(Args);
+  static_assert(NArgs);
+
+  constexpr auto ArgTuple = std::make_tuple(Args...);
+  static_assert(std::is_same_v<decltype(std::get<0>(ArgTuple)), queue>);
+  queue Queue = std::get<0>(ArgTuple);
+
+  if constexpr (std::is_same_v<Param, ext::oneapi::experimental::info::kernel_queue_specific::max_num_work_groups>) {
+    static_assert(NArgs == 3); // sycl::queue, sycl::range, size_t
+    auto WorkGroupSize = std::get<1>(ArgTuple);
+    auto DynamicLocalMemorySize = std::get<2>(ArgTuple);
+    // Q: Should we allow any sycl::range between 1 and 3 for user convenience?
+    static_assert(std::is_same_v<decltype(WorkGroupSize), sycl::range<3>>);
+    static_assert(std::is_same_v<decltype(DynamicLocalMemorySize), size_t>);
+    return impl->ext_oneapi_get_info<Param>(Queue, WorkGroupSize, DynamicLocalMemorySize);
+  } else {
+    throw std::runtime_error("Invalid kernel_queue_specific trait.");
+  }
+}
 
 #define __SYCL_PARAM_TRAITS_SPEC(DescType, Desc, ReturnT, PiCode)              \
   template __SYCL_EXPORT ReturnT kernel::get_info<info::DescType::Desc>(       \
@@ -119,11 +142,17 @@ kernel::ext_oneapi_get_info(queue Queue, const range<3> &WorkGroupSize,
                                           DynamicLocalMemorySize);
 }
 
+// TODO: Deprecate max_num_work_group_sync.
 template __SYCL_EXPORT typename ext::oneapi::experimental::info::
     kernel_queue_specific::max_num_work_group_sync::return_type
     kernel::ext_oneapi_get_info<
         ext::oneapi::experimental::info::kernel_queue_specific::
             max_num_work_group_sync>(queue Queue) const;
+
+#define __SYCL_PARAM_TRAITS_SPEC(Namespace, DescType, Desc, ReturnT)           \
+  template __SYCL_EXPORT ReturnT                                               \
+  kernel::ext_oneapi_get_info_new_impl<info::kernel::Desc>() const;
+#undef __SYCL_PARAM_TRAITS_SPEC
 
 #define __SYCL_PARAM_TRAITS_SPEC(Namespace, DescType, Desc, ReturnT)           \
   template __SYCL_EXPORT ReturnT                                               \

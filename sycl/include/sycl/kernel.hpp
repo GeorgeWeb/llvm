@@ -10,6 +10,7 @@
 
 #include <cstddef>                            // for size_t
 #include <memory>                             // for shared_ptr, hash, opera...
+#include <stdexcept>
 #include <sycl/backend_types.hpp>             // for backend, backend_return_t
 #include <sycl/context.hpp>                   // for context
 #include <sycl/detail/defines_elementary.hpp> // for __SYCL2020_DEPRECATED
@@ -22,6 +23,7 @@
 #include <sycl/device.hpp>              // for device
 #include <sycl/kernel_bundle_enums.hpp> // for bundle_state
 #include <sycl/range.hpp>               // for range
+#include <type_traits>
 #include <ur_api.h>                     // for ur_native_handle_t
 #include <variant>                      // for hash
 
@@ -158,9 +160,6 @@ public:
   typename detail::is_kernel_device_specific_info_desc<Param>::return_type
       get_info(const device &Device, const range<3> &WGSize) const;
 
-  // TODO: Revisit and align with sycl_ext_oneapi_forward_progress extension
-  // once #7598 is merged. (regarding the 'max_num_work_group_sync' query)
-
   /// Query queue/launch-specific information from a kernel using the
   /// info::kernel_queue_specific descriptor for a specific Queue.
   ///
@@ -168,6 +167,7 @@ public:
   /// \return depends on information being queried.
   template <typename Param>
   typename detail::is_kernel_queue_specific_info_desc<Param>::return_type
+  __SYCL2020_DEPRECATED("Use the overload with variadic arguments")
   ext_oneapi_get_info(queue Queue) const;
 
   /// Query queue/launch-specific information from a kernel using the
@@ -179,9 +179,21 @@ public:
   /// requested for.
   /// \return depends on information being queried.
   template <typename Param>
+  __SYCL2020_DEPRECATED("Use the overload with variadic arguments")
   typename detail::is_kernel_queue_specific_info_desc<Param>::return_type
   ext_oneapi_get_info(queue Queue, const range<3> &WorkGroupSize,
                       size_t DynamicLocalMemorySize) const;
+
+  /// Query queue/launch-specific information from a kernel using the
+  /// info::kernel_queue_specific descriptor for a specific Queue.
+  ///
+  /// \param Queue is a valid SYCL queue.
+  /// \return depends on information being queried.
+  template <typename Param, typename... TArgs>
+  typename detail::is_kernel_queue_specific_info_desc<Param>::return_type
+  ext_oneapi_get_info_new_impl(TArgs... Args) const {
+    return ext_oneapi_get_info_new_impl<Param>(Args...);
+  }
 
 private:
   /// Constructs a SYCL kernel object from a valid kernel_impl instance.
@@ -206,6 +218,9 @@ private:
   typename detail::ABINeutralT_t<
       typename detail::is_kernel_info_desc<Param>::return_type>
   get_info_impl() const;
+  template <typename Param, typename... TArgs>
+  typename detail::is_kernel_queue_specific_info_desc<Param>::return_type
+  ext_oneapi_get_info_new_impl(TArgs... Args) const;
 };
 } // namespace _V1
 } // namespace sycl

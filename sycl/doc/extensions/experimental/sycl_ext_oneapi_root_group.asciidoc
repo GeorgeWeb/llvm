@@ -100,10 +100,15 @@ using device queries, as shown in the example below.
 
 [source,c++]
 ----
+using data_type = int;
+constexpr const size_t wgSize = 32;
+
 auto bundle = sycl::get_kernel_bundle(q.get_context());
 auto kernel = bundle.get_kernel<class KernelName>();
-auto maxWGs = kernel.ext_oneapi_get_info<sycl::ext::oneapi::experimental::info::kernel_queue_specific::max_num_work_group_sync>(q);
-auto range = sycl::nd_range<1>{maxWGs * 32, 32};
+auto maxWgSize = kernel.get_info<sycl::info::kernel_device_specific::work_group_size>(dev);
+auto maxWGs = kernel.ext_oneapi_get_info<sycl::ext::oneapi::experimental::info::kernel_queue_specific::max_num_work_groups>(q,
+    sycl::range{maxWgSize, 1, 1}, wgSize * sizeof(data_type));
+auto range = sycl::nd_range<1>{maxWGs * wgSize, wgSize};
 auto props = sycl::ext::oneapi::experimental::properties{sycl::ext::oneapi::experimental::use_root_sync};
 q.parallel_for<class KernelName>(range, props, [=](sycl::nd_item<1> it) {
 
