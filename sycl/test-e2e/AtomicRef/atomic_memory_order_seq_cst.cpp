@@ -5,6 +5,8 @@
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <sycl/atomic_fence.hpp>
+#include <sycl/group_barrier.hpp>
 using namespace sycl;
 
 constexpr size_t N_items = 128;
@@ -110,13 +112,16 @@ template <memory_order order> void test_local(size_t N_iters) {
   queue q;
   buffer<int, 2> res_buf({N_items / 2, N_iters});
 
+  constexpr const memory_scope scope{memory_scope::device};
+
   q.submit([&](handler &cgh) {
      auto res = res_buf.template get_access<access::mode::discard_write>(cgh);
      local_accessor<int, 1> val(2, cgh);
      cgh.parallel_for(nd_range<1>(N_items, N_items), [=](nd_item<1> it) {
        val[0] = 0;
-       it.barrier(access::fence_space::local_space);
-       auto atm = atomic_ref<int, memory_order::acq_rel, memory_scope::device,
+       //it.barrier(access::fence_space::local_space);
+       sycl::group_barrier(it.get_group(), memory_scope::work_group);
+       auto atm = atomic_ref<int, memory_order::acq_rel, scope,
                              access::address_space::local_space>(val[0]);
        size_t id = it.get_global_id(0);
        for (int i = 0; i < N_iters; i++) {
@@ -124,9 +129,20 @@ template <memory_order order> void test_local(size_t N_iters) {
            atm.store(id / 2 + i * N_items / 2 + 1,
                      order == memory_order::acq_rel ? memory_order::release
                                                     : order);
-         } else {
+#if defined(__AMDGPU__)
+           //__asm__ __volatile("s_waitcnt lgkmcnt(0)");
+           //__asm__ __volatile("s_waitcnt_vscnt null, 0x0");
+           //__asm__ __volatile("buffer_gl0_inv");
+#endif
+         }
+         else {
+         //if (id & 1) {
            res[id / 2][i] = atm.load(
                order == memory_order::acq_rel ? memory_order::acquire : order);
+#if defined(__AMDGPU__)
+           //__asm__ __volatile("s_waitcnt_vscnt null, 0x0");
+           //__asm__ __volatile("buffer_gl0_inv");
+#endif
          }
        }
      });
@@ -147,10 +163,14 @@ int main() {
     return 0;
   }
 
-  const size_t N_iters = CalculateIterations(d, 1000);
+  constexpr size_t kIterations = 1000;
+
+  const size_t N_iters = CalculateIterations(d, kIterations);
   std::cout << "Using N_iters " << N_iters << std::endl;
 
-  test_global<memory_order::seq_cst>(N_iters);
+  //std::cout << "Test global\n";
+  //test_global<memory_order::seq_cst>(N_iters);
+  std::cout << "Test local\n";
   test_local<memory_order::seq_cst>(N_iters);
 
   std::cout << "Test passed." << std::endl;

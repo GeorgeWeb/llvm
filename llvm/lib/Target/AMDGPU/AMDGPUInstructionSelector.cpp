@@ -2831,6 +2831,15 @@ void AMDGPUInstructionSelector::initM0(MachineInstr &I) const {
 bool AMDGPUInstructionSelector::selectG_LOAD_STORE_ATOMICRMW(
   MachineInstr &I) const {
   initM0(I);
+
+  // Testing and "hacking"...
+  const LLT PtrTy = MRI->getType(I.getOperand(1).getReg());
+  unsigned AS = PtrTy.getAddressSpace();
+  if (I.getOpcode() == AMDGPU::G_STORE) {
+    llvm::outs() << "Dumping Store:\n";
+    I.dump();
+  }
+
   return selectImpl(I, *CoverageInfo);
 }
 

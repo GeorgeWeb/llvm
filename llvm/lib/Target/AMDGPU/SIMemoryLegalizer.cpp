@@ -323,6 +323,11 @@ public:
     return false;
   };
 
+  /// \returns Returns true if \p MI is modified, false otherwise.
+  virtual bool enableGDS(const MachineBasicBlock::iterator &MI) const {
+    return false;
+  }
+
   /// Inserts any necessary instructions at position \p Pos relative
   /// to instruction \p MI to ensure memory instructions before \p Pos of kind
   /// \p Op associated with address spaces \p AddrSpace have completed. Used
@@ -557,10 +562,16 @@ public:
                              SIAtomicScope Scope,
                              SIAtomicAddrSpace AddrSpace) const override;
 
+  bool enableStoreCacheBypass(const MachineBasicBlock::iterator &MI,
+                              SIAtomicScope Scope,
+                              SIAtomicAddrSpace AddrSpace) const override;
+
   bool enableVolatileAndOrNonTemporal(MachineBasicBlock::iterator &MI,
                                       SIAtomicAddrSpace AddrSpace, SIMemOp Op,
                                       bool IsVolatile, bool IsNonTemporal,
                                       bool IsLastUse) const override;
+
+  bool enableGDS(const MachineBasicBlock::iterator &MI) const override;
 
   bool insertWait(MachineBasicBlock::iterator &MI,
                   SIAtomicScope Scope,
@@ -1151,8 +1162,7 @@ bool SIGfx6CacheControl::insertWait(MachineBasicBlock::iterator &MI,
                             VMCnt ? 0 : getVmcntBitMask(IV),
                             getExpcntBitMask(IV),
                             LGKMCnt ? 0 : getLgkmcntBitMask(IV));
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT_soft))
-        .addImm(WaitCntImmediate);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(WaitCntImmediate);
     Changed = true;
   }
 
@@ -1876,20 +1886,56 @@ bool SIGfx10CacheControl::enableLoadCacheBypass(
     case SIAtomicScope::AGENT:
       // Set the L0 and L1 cache policies to MISS_EVICT.
       // Note: there is no L2 cache coherent bypass control at the ISA level.
+      // Miss in L0 and force fetch to L2.
       Changed |= enableGLCBit(MI);
+      // Ensure that reads are forced to miss in L1, MISS_EVICT policy.
       Changed |= enableDLCBit(MI);
+      //
+      // Experimental: Hit no allocate. This will for retrieval from memory.
+      //Changed |= enableSLCBit(MI);
       break;
     case SIAtomicScope::WORKGROUP:
       // In WGP mode the waves of a work-group can be executing on either CU of
       // the WGP. Therefore need to bypass the L0 which is per CU. Otherwise in
       // CU mode all waves of a work-group are on the same CU, and so the L0
       // does not need to be bypassed.
-      if (!ST.isCuModeEnabled())
+      if (!ST.isCuModeEnabled()) {
         Changed |= enableGLCBit(MI);
+        // Ensure that reads are forced to miss in L1, MISS_EVICT policy.
+        //Changed |= enableDLCBit(MI);
+        // exp
+        //Changed |= enableSLCBit(MI);
+      }
       break;
     case SIAtomicScope::WAVEFRONT:
     case SIAtomicScope::SINGLETHREAD:
       // No cache to bypass.
+      break;
+    default:
+      llvm_unreachable("Unsupported synchronization scope");
+    }
+  }
+
+  if ((AddrSpace & SIAtomicAddrSpace::LDS) != SIAtomicAddrSpace::NONE) {
+    switch (Scope) {
+    case SIAtomicScope::SYSTEM:
+    case SIAtomicScope::AGENT:
+    case SIAtomicScope::WORKGROUP: {
+      if (ST.hasGDS())
+        Changed |= enableGDS(MI);
+      // In WGP mode the waves of a work-group can be executing on either CU of
+      // the WGP.
+      if (!ST.isCuModeEnabled()) {
+        Changed |= enableGLCBit(MI);
+        // Ensure that reads are forced to miss in L1, MISS_EVICT policy.
+        //Changed |= enableDLCBit(MI);
+      }
+    }
+      break;
+    case SIAtomicScope::WAVEFRONT:
+    case SIAtomicScope::SINGLETHREAD:
+      // The LDS keeps all memory operations in order for
+      // the same wavefront.
       break;
     default:
       llvm_unreachable("Unsupported synchronization scope");
@@ -1902,6 +1948,76 @@ bool SIGfx10CacheControl::enableLoadCacheBypass(
   /// memory.
 
   /// Other address spaces do not have a cache.
+
+  return Changed;
+}
+
+bool SIGfx10CacheControl::enableStoreCacheBypass(
+    const MachineBasicBlock::iterator &MI,
+    SIAtomicScope Scope,
+    SIAtomicAddrSpace AddrSpace) const {
+  // TODO:
+  assert(!MI->mayLoad() && MI->mayStore());
+  bool Changed = false;
+
+  // For stores:
+  // The L1 Cache is write-through, so auto-bypassed but stays coherent.
+  // The L0 Cache is always Miss-Evict, where dirtied lines are written
+  // to the L2 cache automatically and invalidated.
+
+  if ((AddrSpace & SIAtomicAddrSpace::GLOBAL) != SIAtomicAddrSpace::NONE) {
+    switch (Scope) {
+    case SIAtomicScope::SYSTEM:
+    case SIAtomicScope::AGENT:
+      // Writes miss L0, write through to L2. No persistence across wavefronts.
+      // Following reads need MISS_EVICT cache-policies set for L0 and L1.
+      // Note: there is no L2 cache coherent bypass control at the ISA level.
+      Changed |= enableGLCBit(MI);
+      // Experimental: Writes will bypass the L2 Cache.
+      // Following reads need to bypass L2 and retrieve from memory directly.
+      //Changed |= enableDLCBit(MI); // exp
+      //
+      // Experimental: Hit no allocate. Might not be needed for reads actually!
+      //Changed |= enableSLCBit(MI);
+      break;
+    case SIAtomicScope::WORKGROUP:
+      // In WGP mode the waves of a work-group can be executing on either CU of
+      // the WGP.
+      if (!ST.isCuModeEnabled()) {
+        Changed |= enableGLCBit(MI);
+        // exp
+        //Changed |= enableDLCBit(MI);
+      }
+      break;
+    case SIAtomicScope::WAVEFRONT:
+    case SIAtomicScope::SINGLETHREAD:
+      // No cache to bypass.
+      break;
+    }
+  }
+
+  if ((AddrSpace & SIAtomicAddrSpace::LDS) != SIAtomicAddrSpace::NONE) {
+    switch (Scope) {
+    case SIAtomicScope::SYSTEM:
+    case SIAtomicScope::AGENT:
+    case SIAtomicScope::WORKGROUP: {
+      if (ST.hasGDS())
+        Changed |= enableGDS(MI);
+      // In WGP mode the waves of a work-group can be executing on either CU of
+      // the WGP.
+      if (!ST.isCuModeEnabled())
+        Changed |= enableGLCBit(MI);
+    }
+      break;
+    case SIAtomicScope::WAVEFRONT:
+    case SIAtomicScope::SINGLETHREAD:
+      // The LDS keeps all memory operations in order for
+      // the same wavefront.
+      break;
+    default:
+      llvm_unreachable("Unsupported synchronization scope");
+    }
+  }
 
   return Changed;
 }
@@ -1957,6 +2073,28 @@ bool SIGfx10CacheControl::enableVolatileAndOrNonTemporal(
   return Changed;
 }
 
+bool SIGfx10CacheControl::enableGDS(const MachineBasicBlock::iterator &MI) const {
+  MachineOperand *GDS = TII->getNamedOperand(*MI, AMDGPU::OpName::gds);
+  if (!GDS) {
+    return false;
+  }
+
+  MachineInstr &MInstr = *MI;
+  llvm::outs() << "GDS before:\n";
+  GDS->dump();
+  MInstr.dump();
+
+  if (!GDS->getImm()) {
+    constexpr const int64_t Enabled = 0;
+    GDS->setImm(Enabled);
+  }
+
+  llvm::outs() << "GDS after:\n";
+  GDS->dump();
+  MInstr.dump();
+  return true;
+}
+
 bool SIGfx10CacheControl::insertWait(MachineBasicBlock::iterator &MI,
                                      SIAtomicScope Scope,
                                      SIAtomicAddrSpace AddrSpace,
@@ -1992,10 +2130,15 @@ bool SIGfx10CacheControl::insertWait(MachineBasicBlock::iterator &MI,
       // Otherwise in CU mode and all waves of a work-group are on the same CU
       // which shares the same L0.
       if (!ST.isCuModeEnabled()) {
-        if ((Op & SIMemOp::LOAD) != SIMemOp::NONE)
+        llvm::outs() << "gfx10 uses WGP mode.\n";
+        if ((Op & SIMemOp::LOAD) != SIMemOp::NONE) {
+          llvm::outs() << "VMCnt for LOAD\n";
           VMCnt |= true;
-        if ((Op & SIMemOp::STORE) != SIMemOp::NONE)
+        }
+        if ((Op & SIMemOp::STORE) != SIMemOp::NONE) {
+          llvm::outs() << "VSCnt for STORE\n";
           VSCnt |= true;
+        }
       }
       break;
     case SIAtomicScope::WAVEFRONT:
@@ -2019,6 +2162,7 @@ bool SIGfx10CacheControl::insertWait(MachineBasicBlock::iterator &MI,
       // synchronizing with global/GDS memory as LDS operations could be
       // reordered with respect to later global/GDS memory operations of the
       // same wave.
+      llvm::outs() << "WORKGROUP LDS\n";
       LGKMCnt |= IsCrossAddrSpaceOrdering;
       break;
     case SIAtomicScope::WAVEFRONT:
@@ -2041,6 +2185,7 @@ bool SIGfx10CacheControl::insertWait(MachineBasicBlock::iterator &MI,
       // synchronizing with global/LDS memory as GDS operations could be
       // reordered with respect to later global/LDS memory operations of the
       // same wave.
+      llvm::outs() << "AGENT GDS\n";
       LGKMCnt |= IsCrossAddrSpaceOrdering;
       break;
     case SIAtomicScope::WORKGROUP:
@@ -2055,18 +2200,31 @@ bool SIGfx10CacheControl::insertWait(MachineBasicBlock::iterator &MI,
   }
 
   if (VMCnt || LGKMCnt) {
-    unsigned WaitCntImmediate =
-      AMDGPU::encodeWaitcnt(IV,
-                            VMCnt ? 0 : getVmcntBitMask(IV),
-                            getExpcntBitMask(IV),
-                            LGKMCnt ? 0 : getLgkmcntBitMask(IV));
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT_soft))
-        .addImm(WaitCntImmediate);
+    if (bool SplitLGKMCnt_Hack = false; SplitLGKMCnt_Hack) {
+      const unsigned WaitcntBitmask = getWaitcntBitMask(IV);
+      if (VMCnt) {
+        unsigned VMcntBitmask = VMCnt ? 0 : getVmcntBitMask(IV);
+        unsigned VMcntImm = encodeVmcnt(IV, WaitcntBitmask, VMcntBitmask);
+        BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(VMcntImm);
+      }
+      if (LGKMCnt) {
+        unsigned LGKMcntBitmask = LGKMCnt ? 0 : getLgkmcntBitMask(IV);
+        unsigned LGKMcntImm = encodeLgkmcnt(IV, WaitcntBitmask, LGKMcntBitmask);
+        BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(LGKMcntImm);
+      }
+    } else {
+      unsigned WaitCntImmediate =
+        AMDGPU::encodeWaitcnt(IV,
+                              VMCnt ? 0 : getVmcntBitMask(IV),
+                              getExpcntBitMask(IV),
+                              LGKMCnt ? 0 : getLgkmcntBitMask(IV));
+      BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT)).addImm(WaitCntImmediate);
+    }
     Changed = true;
   }
 
   if (VSCnt) {
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT_VSCNT_soft))
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAITCNT_VSCNT))
         .addReg(AMDGPU::SGPR_NULL, RegState::Undef)
         .addImm(0);
     Changed = true;
@@ -2268,11 +2426,11 @@ bool SIGfx12CacheControl::insertWaitsBeforeSystemScopeStore(
   MachineBasicBlock &MBB = *MI->getParent();
   const DebugLoc &DL = MI->getDebugLoc();
 
-  BuildMI(MBB, MI, DL, TII->get(S_WAIT_LOADCNT_soft)).addImm(0);
-  BuildMI(MBB, MI, DL, TII->get(S_WAIT_SAMPLECNT_soft)).addImm(0);
-  BuildMI(MBB, MI, DL, TII->get(S_WAIT_BVHCNT_soft)).addImm(0);
-  BuildMI(MBB, MI, DL, TII->get(S_WAIT_KMCNT_soft)).addImm(0);
-  BuildMI(MBB, MI, DL, TII->get(S_WAIT_STORECNT_soft)).addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(S_WAIT_LOADCNT)).addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(S_WAIT_SAMPLECNT)).addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(S_WAIT_BVHCNT)).addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(S_WAIT_KMCNT)).addImm(0);
+  BuildMI(MBB, MI, DL, TII->get(S_WAIT_STORECNT)).addImm(0);
 
   return true;
 }
@@ -2351,19 +2509,19 @@ bool SIGfx12CacheControl::insertWait(MachineBasicBlock::iterator &MI,
   }
 
   if (LOADCnt) {
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_BVHCNT_soft)).addImm(0);
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_SAMPLECNT_soft)).addImm(0);
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_LOADCNT_soft)).addImm(0);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_BVHCNT)).addImm(0);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_SAMPLECNT)).addImm(0);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_LOADCNT)).addImm(0);
     Changed = true;
   }
 
   if (STORECnt) {
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_STORECNT_soft)).addImm(0);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_STORECNT)).addImm(0);
     Changed = true;
   }
 
   if (DSCnt) {
-    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_DSCNT_soft)).addImm(0);
+    BuildMI(MBB, MI, DL, TII->get(AMDGPU::S_WAIT_DSCNT)).addImm(0);
     Changed = true;
   }
 
@@ -2504,12 +2662,19 @@ bool SIMemoryLegalizer::expandLoad(const SIMemOpInfo &MOI,
                                            MOI.getOrderingAddrSpace());
     }
 
-    if (MOI.getOrdering() == AtomicOrdering::SequentiallyConsistent)
+    if (MOI.getOrdering() == AtomicOrdering::SequentiallyConsistent) {
       Changed |= CC->insertWait(MI, MOI.getScope(),
                                 MOI.getOrderingAddrSpace(),
                                 SIMemOp::LOAD | SIMemOp::STORE,
                                 MOI.getIsCrossAddressSpaceOrdering(),
                                 Position::BEFORE);
+      // exp.
+      /*
+      Changed |= CC->insertAcquire(MI, MOI.getScope(),
+                                  MOI.getInstrAddrSpace(),
+                                  Position::BEFORE);
+      */
+    }
 
     if (MOI.getOrdering() == AtomicOrdering::Acquire ||
         MOI.getOrdering() == AtomicOrdering::SequentiallyConsistent) {
@@ -2556,6 +2721,24 @@ bool SIMemoryLegalizer::expandStore(const SIMemOpInfo &MOI,
                                    MOI.getOrderingAddrSpace(),
                                    MOI.getIsCrossAddressSpaceOrdering(),
                                    Position::BEFORE);
+
+    // exp.
+    /*
+    if (MOI.getOrdering() == AtomicOrdering::SequentiallyConsistent) {
+      // This will synchronise LDS operations and vector memory operations
+      // between the wavefronts of a work-group.
+      Changed |= CC->insertWait(MI, MOI.getScope(),
+                                MOI.getInstrAddrSpace(),
+                                SIMemOp::STORE,
+                                MOI.getIsCrossAddressSpaceOrdering(),
+                                Position::AFTER);
+      // This will invalidate the L0 cache so following global memops won't see
+      // stale data.
+      Changed |= CC->insertAcquire(MI, MOI.getScope(),
+                                   MOI.getOrderingAddrSpace(),
+                                   Position::AFTER);
+    }
+    */
 
     return Changed;
   }

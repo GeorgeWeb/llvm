@@ -10,6 +10,22 @@
 #include <spirv/spirv.h>
 #include <spirv/spirv_types.h>
 
+_CLC_INLINE void builtin_fence_order(enum Scope scope, unsigned int order) {
+  switch (scope) {
+  case CrossDevice:
+    BUILTIN_FENCE(order, "")
+  case Device:
+    BUILTIN_FENCE(order, "agent")
+  case Workgroup:
+    BUILTIN_FENCE(order, "workgroup")
+  case Subgroup:
+    BUILTIN_FENCE(order, "wavefront")
+  case Invocation:
+    BUILTIN_FENCE(order, "singlethread")
+  }
+}
+#undef BUILTIN_FENCE
+
 #define AMDGPU_ATOMIC_LOAD_IMPL(TYPE, TYPE_MANGLED, AS, AS_MANGLED)                                          \
   _CLC_DEF TYPE                                                                                              \
       _Z18__spirv_AtomicLoadP##AS_MANGLED##TYPE_MANGLED##N5__spv5Scope4FlagENS1_19MemorySemanticsMask4FlagE( \

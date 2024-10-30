@@ -19123,8 +19123,10 @@ Value *CodeGenFunction::EmitAMDGPUBuiltinExpr(unsigned BuiltinID,
     ProcessOrderScopeAMDGCN(EmitScalarExpr(E->getArg(0)),
                             EmitScalarExpr(E->getArg(1)), AO, SSID);
     FenceInst *Fence = Builder.CreateFence(AO, SSID);
-    if (E->getNumArgs() > 2)
+    if (E->getNumArgs() > 2) {
+      llvm::outs() << "AddAMDGPUFenceAddressSpaceMMRA\n";
       AddAMDGPUFenceAddressSpaceMMRA(Fence, E);
+    }
     return Fence;
   }
   case AMDGPU::BI__builtin_amdgcn_atomic_inc32:

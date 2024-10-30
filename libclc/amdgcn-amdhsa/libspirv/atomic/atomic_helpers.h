@@ -15,6 +15,46 @@ extern int __oclc_amdgpu_reflect(__constant char *);
 #define AMDGPU_ARCH_BETWEEN(LOWER, UPPER)                                      \
   __oclc_ISA_version >= LOWER &&__oclc_ISA_version < UPPER
 
+#define BUILTIN_FENCE(order, scope)                                            \
+/* None implies Monotonic (for llvm/AMDGPU), or relaxed in C++.                \
+  * This does not make sense as ordering argument for a fence instruction      \
+  * and is not part of the supported orderings for a fence in AMDGPU. */       \
+if (order != None) {                                                           \
+  switch (order) {                                                             \
+  case Acquire:                                                                \
+    return __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, scope);                    \
+  case Release:                                                                \
+    return __builtin_amdgcn_fence(__ATOMIC_RELEASE, scope);                    \
+  case AcquireRelease:                                                         \
+    return __builtin_amdgcn_fence(__ATOMIC_ACQ_REL, scope);                    \
+  case SequentiallyConsistent:                                                 \
+    return __builtin_amdgcn_fence(__ATOMIC_SEQ_CST, scope);                    \
+  default:                                                                     \
+    __builtin_trap();                                                          \
+    __builtin_unreachable();                                                   \
+  }                                                                            \
+}
+
+#define BUILTIN_FENCE_MASKED(order, scope, mask)                               \
+/* None implies Monotonic (for llvm/AMDGPU), or relaxed in C++.                \
+  * This does not make sense as ordering argument for a fence instruction      \
+  * and is not part of the supported orderings for a fence in AMDGPU. */       \
+if (mask != NULL && order != None) {                                           \
+  switch (order) {                                                             \
+  case Acquire:                                                                \
+    return __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, scope, mask);              \
+  case Release:                                                                \
+    return __builtin_amdgcn_fence(__ATOMIC_RELEASE, scope, mask);              \
+  case AcquireRelease:                                                         \
+    return __builtin_amdgcn_fence(__ATOMIC_ACQ_REL, scope, mask);              \
+  case SequentiallyConsistent:                                                 \
+    return __builtin_amdgcn_fence(__ATOMIC_SEQ_CST, scope, mask);              \
+  default:                                                                     \
+    __builtin_trap();                                                          \
+    __builtin_unreachable();                                                   \
+  }                                                                            \
+}
+
 #define GET_ATOMIC_SCOPE_AND_ORDER(IN_SCOPE, OUT_SCOPE, IN_SEMANTICS,          \
                                    OUT_ORDER)                                  \
   {                                                                            \
